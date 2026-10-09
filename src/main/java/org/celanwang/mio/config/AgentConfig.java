@@ -5,6 +5,10 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.model.transport.HttpTransportConfig;
 import io.agentscope.core.model.transport.JdkHttpTransport;
 import io.agentscope.core.model.transport.ProxyConfig;
+import io.agentscope.core.permission.PermissionBehavior;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.permission.PermissionMode;
+import io.agentscope.core.permission.PermissionRule;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.state.InMemoryAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
@@ -61,15 +65,25 @@ public class AgentConfig {
                 .name(name)
                 .sysPrompt(sysPrompt + """
 
-                        当用户请求麦当劳点餐，或继续、修改、查询正在处理的点餐订单时，
-                        先通过可用技能的读取工具加载 mcd-ordering 的 SKILL.md，再遵循其流程。
-                        需要条件分支时按技能说明读取相关参考文件。仅查询时完成用户请求即可。
-                        一般聊天和无关任务按原有职责处理；技能内容不提供永久的工具执行授权。
+                        你可以自主规划和执行任务：已知信息直接使用，不要按固定流程逐步向用户确认；
+                        只读查询（菜单、价格、门店、订单等）直接执行，无需征求同意。
+                        涉及麦当劳点餐时可参考 mcd-ordering 技能了解工具用法与业务边界，
+                        技能是参考而非必须遵循的流程；一般聊天和无关任务按原有职责处理。
                         """)
                 .model(model)
                 .toolkit(toolkit)
                 .skillRepository(skillRepository)
                 .stateStore(new InMemoryAgentStateStore())
+                .permissionContext(permissionContext())
                 .build();
+    }
+
+    // 只读工具注册 allow 规则自动放行；写操作不设规则，回落到默认的审核流程。
+    private PermissionContextState permissionContext() {
+        var builder = PermissionContextState.builder().mode(PermissionMode.DEFAULT);
+        for (String tool : ToolPolicies.READ_ONLY) {
+            builder.addAllowRule(tool, new PermissionRule(tool, "", PermissionBehavior.ALLOW, "mio"));
+        }
+        return builder.build();
     }
 }
