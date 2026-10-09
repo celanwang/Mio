@@ -28,6 +28,16 @@ app:
     api-key: ${DASHSCOPE_API_KEY:}
     model-name: qwen3-max
 
+  jev:
+    # 是否启用 Jev 决策审核：写操作先由 Jev 判断，通过则自动执行，不通过转人工确认。
+    # 未启用或未配置 key 时，写操作一律转人工确认。
+    enabled: ${JEV_ENABLED:true}
+    # 在 .env 或运行配置中设置 TYPESAFE_API_KEY。
+    api-key: ${TYPESAFE_API_KEY:}
+    model: jev-latest
+    # Noul 概率不低于该阈值时自动放行，否则转人工。
+    auto-approve-threshold: ${JEV_AUTO_APPROVE_THRESHOLD:0.8}
+
   agent:
     name: 智能助手
     sys-prompt: "你是一个个人 AI 助手，请用中文回答用户的问题，并根据用户需求使用可用工具。"
