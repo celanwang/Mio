@@ -4,12 +4,16 @@ import org.celanwang.mio.config.ToolPolicies;
 import org.celanwang.mio.model.dto.ChatRequest;
 import org.celanwang.mio.model.vo.ChatResponse;
 import org.celanwang.mio.model.vo.ToolConfirmation;
+import org.celanwang.mio.trace.TraceStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolCallState;
+import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.state.AgentState;
@@ -44,14 +48,20 @@ public class ChatService {
     private final ReActAgent agent;
     private final JevClient jevClient;
     private final double jevThreshold;
+    private final TraceStore traceStore;
+    private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
 
     public ChatService(ReActAgent agent,
                        ObjectProvider<JevClient> jevClient,
-                       @Value("${app.jev.auto-approve-threshold:0.8}") double jevThreshold) {
+                       @Value("${app.jev.auto-approve-threshold:0.8}") double jevThreshold,
+                       TraceStore traceStore,
+                       ObjectMapper objectMapper) {
         this.agent = agent;
         this.jevClient = jevClient.getIfAvailable();
         this.jevThreshold = jevThreshold;
+        this.traceStore = traceStore;
+        this.objectMapper = objectMapper;
     }
 
     public Mono<ChatResponse> chat(ChatRequest request) {
@@ -68,6 +78,8 @@ public class ChatService {
                 boolean hasDecisions = decisions != null && !decisions.isEmpty();
                 if (!pending.isEmpty() && !hasDecisions) {
                     // 已暂停时直接重新展示确认卡片，避免把普通提问交给暂停中的 Agent。
+                    traceStore.append(sessionId, "ask", "等待人工确认",
+                            "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                     return Mono.just(response(sessionId, "请先选择是否允许下面的操作，再继续对话。", pending));
                 }
                 UserMessage message;
@@ -76,6 +88,14 @@ public class ChatService {
                         throw new ResponseStatusException(HttpStatus.CONFLICT, "确认已失效，请开启新对话后重新提问。");
                     }
                     List<ConfirmResult> results = confirmResults(pending, decisions);
+                    traceStore.append(sessionId, "confirm", "人工确认",
+                            pending.stream()
+                                    .map(call -> call.getName() + " → "
+                                            + (decisions.stream()
+                                                    .filter(d -> call.getId().equals(d.toolCallId()))
+                                                    .findFirst().map(ChatRequest.Confirmation::approved)
+                                                    .orElse(false) ? "允许" : "拒绝"))
+                                    .toList().toString());
                     message = UserMessage.builder()
                             .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, results))
                             .build();
@@ -83,10 +103,11 @@ public class ChatService {
                     if (!StringUtils.hasText(request.getMessage())) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入消息内容。");
                     }
+                    traceStore.append(sessionId, "user", "用户消息", request.getMessage());
                     message = new UserMessage(request.getMessage());
                 }
                 List<String> autoApproved = new ArrayList<>();
-                return callWithJevApproval(message, context, autoApproved)
+                return callWithJevApproval(message, context, autoApproved, sessionId)
                         .map(reply -> {
                             String text = reply.getTextContent();
                             if (!autoApproved.isEmpty()) {
@@ -104,18 +125,26 @@ public class ChatService {
      * 全部通过则自动放行并继续执行，任一不通过或 Jev 不可用则转人工确认。
      */
     private Mono<Msg> callWithJevApproval(UserMessage message, RuntimeContext context,
-                                          List<String> autoApproved) {
+                                          List<String> autoApproved, String sessionId) {
+        int before = messageCount(context);
         return agent.call(List.of(message), context).flatMap(reply -> {
+            traceNewMessages(sessionId, context, before);
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null
                     || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {
+                if (!pending.isEmpty()) {
+                    traceStore.append(sessionId, "ask", "等待人工确认",
+                            "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
+                }
                 return Mono.just(reply);
             }
             return Flux.fromIterable(pending)
-                    .flatMapSequential(call -> judgeWithJev(call, context))
+                    .flatMapSequential(call -> judgeWithJev(call, context, sessionId))
                     .collectList()
                     .flatMap(verdicts -> {
                         if (!verdicts.stream().allMatch(Boolean::booleanValue)) {
+                            traceStore.append(sessionId, "ask", "Jev 未通过，转人工确认",
+                                    "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                             return Mono.just(reply);
                         }
                         autoApproved.addAll(pending.stream().map(ToolUseBlock::getName).toList());
@@ -124,16 +153,17 @@ public class ChatService {
                         UserMessage resume = UserMessage.builder()
                                 .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, results))
                                 .build();
-                        return callWithJevApproval(resume, context, autoApproved);
+                        return callWithJevApproval(resume, context, autoApproved, sessionId);
                     })
                     .onErrorResume(e -> {
                         log.warn("Jev 审核失败，转人工确认：{}", e.getMessage());
+                        traceStore.append(sessionId, "ask", "Jev 审核失败，转人工确认", e.getMessage());
                         return Mono.just(reply);
                     });
         });
     }
 
-    private Mono<Boolean> judgeWithJev(ToolUseBlock call, RuntimeContext context) {
+    private Mono<Boolean> judgeWithJev(ToolUseBlock call, RuntimeContext context, String sessionId) {
         Map<String, Object> state = Map.of(
                 "用户需求", userIntent(context),
                 "待执行操作", call.getName(),
@@ -149,9 +179,77 @@ public class ChatService {
             Answer answer = result.answers().get("consistent");
             double probability = answer instanceof NoulAnswer noul && noul.noul() != null
                     ? noul.noul() : 0.0;
+            boolean pass = probability >= jevThreshold;
             log.info("Jev 审核 {}：概率 {}，阈值 {}", call.getName(), probability, jevThreshold);
-            return probability >= jevThreshold;
+            traceStore.append(sessionId, "jev", "Jev 审核 " + call.getName(),
+                    "概率 " + probability + " / 阈值 " + jevThreshold + (pass ? " → 自动执行" : " → 未通过"));
+            return pass;
         });
+    }
+
+    private int messageCount(RuntimeContext context) {
+        AgentState state = agent.getAgentState(context);
+        return state == null ? 0 : state.getContext().size();
+    }
+
+    /** 把本轮新增的助手文本、工具调用与工具结果写入执行链路。 */
+    private void traceNewMessages(String sessionId, RuntimeContext context, int before) {
+        AgentState state = agent.getAgentState(context);
+        if (state == null) {
+            return;
+        }
+        List<Msg> messages = state.getContext();
+        for (int i = Math.max(before, 0); i < messages.size(); i++) {
+            Msg message = messages.get(i);
+            if (message.getRole() == MsgRole.ASSISTANT) {
+                for (TextBlock block : message.getContentBlocks(TextBlock.class)) {
+                    if (StringUtils.hasText(block.getText())) {
+                        traceStore.append(sessionId, "model", "模型输出", truncate(block.getText(), 4000));
+                    }
+                }
+                for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
+                    traceStore.append(sessionId, "tool_call", "调用工具 " + call.getName(),
+                            truncate(toJson(call.getInput()), 2000));
+                }
+            } else if (message.getRole() == MsgRole.TOOL) {
+                for (ToolResultBlock result : message.getContentBlocks(ToolResultBlock.class)) {
+                    traceStore.append(sessionId, "tool_result",
+                            "工具返回 " + result.getName() + "（" + result.getState() + "）",
+                            truncate(outputText(result), 2000));
+                }
+            }
+        }
+    }
+
+    private String outputText(ToolResultBlock result) {
+        if (result.getOutput() == null) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        for (var block : result.getOutput()) {
+            if (block instanceof TextBlock textBlock && StringUtils.hasText(textBlock.getText())) {
+                if (text.length() > 0) {
+                    text.append('\n');
+                }
+                text.append(textBlock.getText());
+            }
+        }
+        return text.toString();
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            return String.valueOf(value);
+        }
+    }
+
+    private String truncate(String text, int max) {
+        if (text == null || text.length() <= max) {
+            return text;
+        }
+        return text.substring(0, max) + "…";
     }
 
     private String userIntent(RuntimeContext context) {
