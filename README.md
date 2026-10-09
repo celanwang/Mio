@@ -8,7 +8,7 @@
 
 ## 启动
 
-密钥通过 `.env` 注入（与 agentscope-jev-qwen-demo 相同的方式，`.env` 已被 `.gitignore` 排除）：
+密钥通过 `.env` 注入（`.env` 已被 `.gitignore` 排除）：
 
 ```bash
 cp .env.example .env   # 然后编辑 .env，填入真实的 DASHSCOPE_API_KEY
