@@ -32,6 +32,11 @@ chmod 600 .env
 | `TYPESAFE_API_KEY` | 可选，TypeSafe AI 的 Jev key。配置后写操作先由 Jev 审核，通过自动执行，不通过转人工；不配置则写操作一律转人工。 |
 | `JEV_ENABLED` | 可选，默认 `true`，设为 `false` 关闭 Jev 审核。 |
 | `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
+| `MIO_SKILLS_DIR` | 可选，Agent 技能目录（文件系统路径），默认项目根目录下的 `./skills`。 |
+
+## 技能目录
+
+Agent 技能（如 `skills/mcd-ordering/`）放在项目根目录的 `skills/` 下，随仓库版本化，但通过文件系统加载——修改技能内容无需重新构建，重启应用即可生效。运行时代码只读使用该目录。启动时会强校验 `mcd-ordering` 技能存在，缺失则启动失败。
 
 ## 试用示例
 

@@ -43,3 +43,5 @@ app:
   agent:
     name: 智能助手
     sys-prompt: "你是一个个人 AI 助手，请用中文回答用户的问题，并根据用户需求使用可用工具。"
+    # Agent 技能目录（文件系统路径，默认项目根 ./skills）；修改技能无需重新构建。
+    skills-dir: ${MIO_SKILLS_DIR:./skills}
