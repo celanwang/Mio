@@ -28,6 +28,10 @@ public final class ToolPolicies {
             "delivery-create-address", "mall-create-order", "party-order-create",
             "draw-lottery");
 
+    /** 允许习惯检测生成自动化提议的白名单工具（非白名单工具永不提议）。 */
+    public static final Set<String> AUTOMATABLE = Set.of(
+            "auto-bind-coupons", "draw-lottery", "query-my-coupons", "query-promotions");
+
     private ToolPolicies() {
     }
 }

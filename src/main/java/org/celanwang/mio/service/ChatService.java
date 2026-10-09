@@ -1,6 +1,7 @@
 package org.celanwang.mio.service;
 
 import org.celanwang.mio.config.ToolPolicies;
+import org.celanwang.mio.memory.HabitDetector;
 import org.celanwang.mio.memory.MioLongTermMemory;
 import org.celanwang.mio.memory.TrustStore;
 import org.celanwang.mio.model.dto.ChatRequest;
@@ -57,6 +58,7 @@ public class ChatService {
     private final TraceStore traceStore;
     private final TrustStore trustStore;
     private final MioLongTermMemory longTermMemory;
+    private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
 
@@ -68,6 +70,7 @@ public class ChatService {
                        TraceStore traceStore,
                        TrustStore trustStore,
                        MioLongTermMemory longTermMemory,
+                       HabitDetector habitDetector,
                        ObjectMapper objectMapper) {
         this.agent = agent;
         this.jevClient = jevClient.getIfAvailable();
@@ -77,6 +80,7 @@ public class ChatService {
         this.traceStore = traceStore;
         this.trustStore = trustStore;
         this.longTermMemory = longTermMemory;
+        this.habitDetector = habitDetector;
         this.objectMapper = objectMapper;
     }
 
@@ -148,6 +152,7 @@ public class ChatService {
             String effectiveModel = traceRouting(sessionId, context);
             traceNewMessages(sessionId, context, before, effectiveModel);
             recordLongTermMemory(context);
+            habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null
                     || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {

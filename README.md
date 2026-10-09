@@ -35,6 +35,7 @@ chmod 600 .env
 | `MIO_SKILLS_DIR` | 可选，Agent 技能目录（文件系统路径），默认项目根目录下的 `./skills`。 |
 | `MIO_DATA_DIR` | 可选，用户画像与记忆数据目录，默认项目根目录下的 `./.mio`（已被 `.gitignore` 排除）。 |
 | `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
+| `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
 
 ## 用户画像与记忆
 
@@ -45,13 +46,23 @@ chmod 600 .env
 ├── memory/events-YYYY-MM.jsonl   ← 执行链路事件日志，按月滚动
 ├── memory/episodes.jsonl         ← 会话消息原始记录（画像可重建的源）
 ├── profile.json                  ← 用户画像（物化视图）
-└── trust.json                    ← 信任规则统计
+├── trust.json                    ← 信任规则统计
+└── automations.json              ← 自动化规则（习惯提议 → 用户批准 → 生效）
 ```
 
 - 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`。
 - 信任统计（`GET/DELETE /api/trust`）只记录人工对写操作的批准/拒绝次数，本轮**只观察、不做自动放行**（自动放行在后续阶段实现）。
 - 提炼只提取用户明确表达的偏好；健康、政治、宗教等敏感主题不提取。
 - 画像文件损坏时按空画像处理（fail-open，不阻断对话），损坏文件会改名 `.corrupted-<时间戳>` 保留。
+
+### 自动化规则（习惯发现 → 提议 → 批准 → 会话开始执行）
+
+习惯检测器（统计式，不用 LLM）扫描事件日志：某白名单工具调用 ≥3 次且分布在 ≥2 个不同日期，即生成一条自动化提议（`PROPOSED`）。白名单工具：`auto-bind-coupons`、`draw-lottery`、`query-my-coupons`、`query-promotions`，其他工具永不提议。
+
+- 提议在面板「画像」视图中可见，**必须由用户显式批准**（`POST /api/automations/{id}/approve`）才生效；拒绝（`REJECTED`）后不再重复提议；已批准规则可吊销（`DELETE /api/automations/{id}`）。
+- 已批准（`ACTIVE`）规则会在会话开始时作为参考信息注入，Agent 感知后主动执行——**不绕过现有权限链**：只读查询直接执行，写操作仍过 Jev/人工审核。
+- 批准/拒绝/吊销动作都会写入事件日志，保持审计链一致。
+- 自动化规则文件损坏时按无规则处理（fail-closed），损坏文件改名 `.corrupted-<时间戳>` 保留。
 
 ## 技能目录
 

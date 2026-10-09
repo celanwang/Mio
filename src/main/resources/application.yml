@@ -52,3 +52,6 @@ app:
     distiller:
       # 是否用轻量模型从对话中提炼显式用户偏好。
       enabled: ${MIO_DISTILLER_ENABLED:true}
+    habit-detector:
+      # 是否从事件日志中统计习惯并生成自动化提议（提议仍需用户在面板批准才生效）。
+      enabled: ${MIO_HABIT_DETECTOR_ENABLED:true}

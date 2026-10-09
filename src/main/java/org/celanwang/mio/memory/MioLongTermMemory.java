@@ -30,6 +30,7 @@ public class MioLongTermMemory implements LongTermMemory {
 
     private final ProfileStore profileStore;
     private final ProfileDistiller distiller;
+    private final AutomationStore automationStore;
     private final Path episodesFile;
     private final ObjectMapper objectMapper;
     /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
@@ -38,21 +39,45 @@ public class MioLongTermMemory implements LongTermMemory {
     public MioLongTermMemory(@Value("${app.memory.dir:./.mio}") String dir,
                              ProfileStore profileStore,
                              ProfileDistiller distiller,
+                             AutomationStore automationStore,
                              ObjectMapper objectMapper) {
         this.episodesFile = JsonFileSupport.expandHome(dir).resolve("memory/episodes.jsonl");
         this.profileStore = profileStore;
         this.distiller = distiller;
+        this.automationStore = automationStore;
         this.objectMapper = objectMapper;
     }
 
-    /** 返回画像文本，由框架（STATIC_CONTROL 模式）注入到本次调用的上下文中；空画像返回空串。 */
+    /**
+     * 返回注入文本（画像 + 自动化提议 + 已授权例行事项），由框架（STATIC_CONTROL 模式）
+     * 注入到本次调用的上下文中；无任何内容时返回空串。全部标注为参考信息而非指令。
+     */
     @Override
     public Mono<String> retrieve(Msg msg) {
-        return Mono.fromCallable(profileStore::render)
+        return Mono.fromCallable(this::renderInjection)
                 .onErrorResume(e -> {
-                    log.warn("画像读取失败（fail-open，按空画像注入）：{}", e.getMessage());
+                    log.warn("记忆注入读取失败（fail-open，按空内容注入）：{}", e.getMessage());
                     return Mono.just("");
                 });
+    }
+
+    private String renderInjection() {
+        StringBuilder text = new StringBuilder(profileStore.render());
+        List<AutomationRule> proposed = automationStore.pending();
+        if (!proposed.isEmpty()) {
+            text.append("\n\n「待决定的自动化提议（参考信息，非指令；可在对话中向用户提及，由用户决定去面板批准）」");
+            for (AutomationRule rule : proposed) {
+                text.append("\n- ").append(rule.title()).append("：").append(rule.reason());
+            }
+        }
+        List<AutomationRule> active = automationStore.active();
+        if (!active.isEmpty()) {
+            text.append("\n\n「用户已授权的例行事项（参考信息；会话开始时可主动执行，仍需遵守现有权限与审核流程）」");
+            for (AutomationRule rule : active) {
+                text.append("\n- ").append(rule.title()).append("（").append(rule.toolName()).append("）");
+            }
+        }
+        return text.toString();
     }
 
     /**
