@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: mio
+  mvc:
+    async:
+      request-timeout: 180s
+
+app:
+  mcp:
+    mcd:
+      # 是否启用麦当劳 MCP；在运行配置中设置 MCD_MCP_ENABLED=true。
+      enabled: ${MCD_MCP_ENABLED:true}
+      # 麦当劳 MCP 官方服务地址，使用流式 HTTP 协议。
+      url: https://mcp.mcd.cn
+      # 在运行配置中设置 MCD_MCP_TOKEN，填写麦当劳平台申请的令牌。
+      token: ${MCD_MCP_TOKEN:}
+
+  dashscope:
+    # 留空时使用 AgentScope 默认地址；需要切换地域时填写该地域的 DashScope 地址。
+    base-url: ${DASHSCOPE_BASE_URL:}
+    # 默认不额外指定代理；按需设置环境变量，例如代理主机 127.0.0.1、端口 7890。
+    proxy:
+      host: ${DASHSCOPE_PROXY_HOST:}
+      port: ${DASHSCOPE_PROXY_PORT:7890}
+    api-key: ${DASHSCOPE_API_KEY:}
+    model-name: qwen3-max
+
+  agent:
+    name: 智能助手
+    sys-prompt: "你是一个个人 AI 助手，请用中文回答用户的问题，并根据用户需求使用可用工具。"
