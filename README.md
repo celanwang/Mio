@@ -15,7 +15,7 @@ cp .env.example .env   # 然后编辑 .env，填入真实的 DASHSCOPE_API_KEY
 chmod 600 .env
 ```
 
-应用启动时会自动加载项目根目录的 `.env`（真实环境变量优先级更高），直接在 IntelliJ IDEA 中运行 `MioApplication` 即可。命令行方式：`./mvnw spring-boot:run`。
+应用启动时会自动加载项目根目录的 `.env`（真实环境变量优先级更高），直接在 IntelliJ IDEA 中运行 `MioApplication` 即可（构建由 IDE 自带的 Maven 完成）。
 
 启动后打开 <http://localhost:8080> 即可开始聊天。
 
