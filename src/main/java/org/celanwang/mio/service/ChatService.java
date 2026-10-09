@@ -22,6 +22,8 @@ import io.agentscope.extensions.judge.jev.JevClient;
 import io.agentscope.extensions.judge.jev.NoulAnswer;
 import io.agentscope.extensions.judge.jev.NoulQuestion;
 import io.agentscope.extensions.judge.jev.SystemOneRequest;
+import io.agentscope.extensions.judge.jev.example.JevModelRouterMiddleware;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -134,7 +136,8 @@ public class ChatService {
                                           List<String> autoApproved, String sessionId) {
         int before = messageCount(context);
         return agent.call(List.of(message), context).flatMap(reply -> {
-            traceNewMessages(sessionId, context, before);
+            String effectiveModel = traceRouting(sessionId, context);
+            traceNewMessages(sessionId, context, before, effectiveModel);
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null
                     || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {
@@ -198,8 +201,27 @@ public class ChatService {
         return state == null ? 0 : state.getContext().size();
     }
 
+    /** 读取 Jev 模型路由结果（若有），记录路由事件并返回本次实际生效的模型名。 */
+    private String traceRouting(String sessionId, RuntimeContext context) {
+        JevModelRouterMiddleware.RoutingDecision decision = JevModelRouterMiddleware.decision(context);
+        if (decision == null || decision.probabilities() == null || decision.probabilities().isEmpty()) {
+            return modelName;
+        }
+        String effectiveModel = decision.model() instanceof DashScopeChatModel dashScope
+                ? dashScope.getModelName() : modelName;
+        String chosen = decision.probabilities().entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey).orElse("?");
+        traceStore.append(sessionId, "jev", "jev", "Jev 模型路由（" + jevModel + "）",
+                "选择 " + chosen + " → " + effectiveModel
+                        + "，置信度 " + decision.confidence()
+                        + "，各选项概率 " + decision.probabilities());
+        return effectiveModel;
+    }
+
     /** 把本轮新增的助手文本、工具调用与工具结果写入执行链路。 */
-    private void traceNewMessages(String sessionId, RuntimeContext context, int before) {
+    private void traceNewMessages(String sessionId, RuntimeContext context, int before,
+                                  String effectiveModel) {
         AgentState state = agent.getAgentState(context);
         if (state == null) {
             return;
@@ -211,12 +233,12 @@ public class ChatService {
                 for (TextBlock block : message.getContentBlocks(TextBlock.class)) {
                     if (StringUtils.hasText(block.getText())) {
                         traceStore.append(sessionId, "qwen", "model",
-                                "Qwen 输出（" + modelName + "）", truncate(block.getText(), 4000));
+                                "Qwen 输出（" + effectiveModel + "）", truncate(block.getText(), 4000));
                     }
                 }
                 for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
                     traceStore.append(sessionId, "tool:" + call.getName(), "tool_call",
-                            "Qwen 发起工具调用 " + call.getName() + "（" + modelName + "）",
+                            "Qwen 发起工具调用 " + call.getName() + "（" + effectiveModel + "）",
                             truncate(toJson(call.getInput()), 2000));
                 }
             } else if (message.getRole() == MsgRole.TOOL) {

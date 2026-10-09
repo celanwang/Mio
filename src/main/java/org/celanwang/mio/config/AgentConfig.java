@@ -12,7 +12,10 @@ import io.agentscope.core.permission.PermissionRule;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.state.InMemoryAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.extensions.judge.jev.JevClient;
+import io.agentscope.extensions.judge.jev.example.JevModelRouterMiddleware;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,7 +34,11 @@ public class AgentConfig {
             @Value("${app.dashscope.base-url:}") String baseUrl,
             @Value("${app.dashscope.proxy.host:}") String proxyHost,
             @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
+        return buildModel(apiKey, modelName, baseUrl, proxyHost, proxyPort);
+    }
 
+    private Model buildModel(String apiKey, String modelName, String baseUrl,
+                             String proxyHost, int proxyPort) {
         var transport = HttpTransportConfig.builder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .responseTimeout(Duration.ofSeconds(60));
@@ -46,7 +53,6 @@ public class AgentConfig {
                 .modelName(modelName) // 原始模型名，例如 qwen-plus
                 .stream(false);       // 等模型生成完整回答后返回
 
-
         if (StringUtils.hasText(baseUrl)) {
             builder.baseUrl(baseUrl.trim());
         }
@@ -58,10 +64,16 @@ public class AgentConfig {
             Model model,
             Toolkit toolkit,
             AgentSkillRepository skillRepository,
+            ObjectProvider<JevClient> jevClient,
             @Value("${app.agent.name:智能助手}") String name,
-            @Value("${app.agent.sys-prompt}") String sysPrompt) {
+            @Value("${app.agent.sys-prompt}") String sysPrompt,
+            @Value("${app.dashscope.api-key}") String apiKey,
+            @Value("${app.dashscope.fast-model-name:qwen-flash}") String fastModelName,
+            @Value("${app.dashscope.base-url:}") String baseUrl,
+            @Value("${app.dashscope.proxy.host:}") String proxyHost,
+            @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
 
-        return ReActAgent.builder()
+        var builder = ReActAgent.builder()
                 .name(name)
                 .sysPrompt(sysPrompt + """
 
@@ -74,8 +86,25 @@ public class AgentConfig {
                 .toolkit(toolkit)
                 .skillRepository(skillRepository)
                 .stateStore(new InMemoryAgentStateStore())
-                .permissionContext(permissionContext())
-                .build();
+                .permissionContext(permissionContext());
+
+        // Jev 可用时按请求复杂度路由模型：复杂任务用主模型，简单请求用轻量模型。
+        JevClient jev = jevClient.getIfAvailable();
+        if (jev != null && StringUtils.hasText(fastModelName)
+                && !fastModelName.trim().equals(modelName(model))) {
+            Model fastModel = buildModel(apiKey, fastModelName.trim(), baseUrl, proxyHost, proxyPort);
+            builder.middleware(JevModelRouterMiddleware.builder(jev)
+                    .choice("complex", model, "需要多步规划、工具编排、点餐下单、计算或复杂推理的请求")
+                    .choice("simple", fastModel, "简单问答、闲聊或一步就能完成的查询")
+                    .confidenceThreshold(0.7)
+                    .failOpen(true)
+                    .build());
+        }
+        return builder.build();
+    }
+
+    private String modelName(Model model) {
+        return model instanceof DashScopeChatModel dashScope ? dashScope.getModelName() : "";
     }
 
     // 只读工具注册 allow 规则自动放行；写操作不设规则，回落到默认的审核流程。

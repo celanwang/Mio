@@ -27,6 +27,8 @@ app:
       port: ${DASHSCOPE_PROXY_PORT:7890}
     api-key: ${DASHSCOPE_API_KEY:}
     model-name: qwen3-max
+    # 轻量模型：配置 Jev 后由 Jev 按请求复杂度路由，简单请求走该模型。
+    fast-model-name: ${DASHSCOPE_FAST_MODEL:qwen-flash}
 
   jev:
     # 是否启用 Jev 决策审核：写操作先由 Jev 判断，通过则自动执行，不通过转人工确认。
