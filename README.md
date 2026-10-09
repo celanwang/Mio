@@ -28,6 +28,7 @@ chmod 600 .env
 | `MCD_MCP_TOKEN` | 麦当劳 MCP 令牌，在 [open.mcd.cn/mcp/doc](https://open.mcd.cn/mcp/doc) 控制台申请；填写有效 token 并把 `MCD_MCP_ENABLED` 设为 `true` 后才能点餐。 |
 | `DASHSCOPE_BASE_URL` | 可选，切换 DashScope 地域地址。 |
 | `DASHSCOPE_PROXY_HOST` / `DASHSCOPE_PROXY_PORT` | 可选，模型服务代理，默认端口 7890。 |
+| `DASHSCOPE_FAST_MODEL` | 可选，轻量模型名（默认 `qwen-flash`）。配置 Jev 后由 Jev 按请求复杂度路由：复杂任务走 `qwen3-max`，简单请求走该模型。 |
 | `TYPESAFE_API_KEY` | 可选，TypeSafe AI 的 Jev key。配置后写操作先由 Jev 审核，通过自动执行，不通过转人工；不配置则写操作一律转人工。 |
 | `JEV_ENABLED` | 可选，默认 `true`，设为 `false` 关闭 Jev 审核。 |
 | `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
