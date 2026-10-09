@@ -88,7 +88,7 @@ async function loadSessions() {
   }
 }
 
-const TYPE_LABEL = { user: '用户', model: '模型', tool_call: '工具调用', tool_result: '工具返回', jev: 'Jev 审核', confirm: '人工确认', ask: '待确认' };
+const TYPE_LABEL = { user: '用户', model: 'Qwen 模型', tool_call: 'Qwen · 工具调用', tool_result: 'MCP 工具返回', jev: 'Jev 模型', confirm: '人工确认', ask: '待确认' };
 
 async function loadEvents() {
   if (!activeSession) return;

@@ -48,6 +48,8 @@ public class ChatService {
     private final ReActAgent agent;
     private final JevClient jevClient;
     private final double jevThreshold;
+    private final String modelName;
+    private final String jevModel;
     private final TraceStore traceStore;
     private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
@@ -55,11 +57,15 @@ public class ChatService {
     public ChatService(ReActAgent agent,
                        ObjectProvider<JevClient> jevClient,
                        @Value("${app.jev.auto-approve-threshold:0.8}") double jevThreshold,
+                       @Value("${app.dashscope.model-name:qwen3-max}") String modelName,
+                       @Value("${app.jev.model:jev-latest}") String jevModel,
                        TraceStore traceStore,
                        ObjectMapper objectMapper) {
         this.agent = agent;
         this.jevClient = jevClient.getIfAvailable();
         this.jevThreshold = jevThreshold;
+        this.modelName = modelName;
+        this.jevModel = jevModel;
         this.traceStore = traceStore;
         this.objectMapper = objectMapper;
     }
@@ -181,7 +187,7 @@ public class ChatService {
                     ? noul.noul() : 0.0;
             boolean pass = probability >= jevThreshold;
             log.info("Jev 审核 {}：概率 {}，阈值 {}", call.getName(), probability, jevThreshold);
-            traceStore.append(sessionId, "jev", "Jev 审核 " + call.getName(),
+            traceStore.append(sessionId, "jev", "Jev 审核 " + call.getName() + "（" + jevModel + "）",
                     "概率 " + probability + " / 阈值 " + jevThreshold + (pass ? " → 自动执行" : " → 未通过"));
             return pass;
         });
@@ -204,11 +210,13 @@ public class ChatService {
             if (message.getRole() == MsgRole.ASSISTANT) {
                 for (TextBlock block : message.getContentBlocks(TextBlock.class)) {
                     if (StringUtils.hasText(block.getText())) {
-                        traceStore.append(sessionId, "model", "模型输出", truncate(block.getText(), 4000));
+                        traceStore.append(sessionId, "model",
+                                "Qwen 输出（" + modelName + "）", truncate(block.getText(), 4000));
                     }
                 }
                 for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
-                    traceStore.append(sessionId, "tool_call", "调用工具 " + call.getName(),
+                    traceStore.append(sessionId, "tool_call",
+                            "Qwen 发起工具调用 " + call.getName() + "（" + modelName + "）",
                             truncate(toJson(call.getInput()), 2000));
                 }
             } else if (message.getRole() == MsgRole.TOOL) {
