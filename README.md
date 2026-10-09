@@ -33,6 +33,25 @@ chmod 600 .env
 | `JEV_ENABLED` | 可选，默认 `true`，设为 `false` 关闭 Jev 审核。 |
 | `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
 | `MIO_SKILLS_DIR` | 可选，Agent 技能目录（文件系统路径），默认项目根目录下的 `./skills`。 |
+| `MIO_DATA_DIR` | 可选，用户画像与记忆数据目录，默认 `~/.mio`。 |
+| `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
+
+## 用户画像与记忆
+
+对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼为用户画像，并在后续对话中作为参考信息注入（标注为非指令，优先级低于用户当次明确表达）。数据全部落盘在本地数据目录（默认 `~/.mio`）：
+
+```
+~/.mio/
+├── memory/events-YYYY-MM.jsonl   ← 执行链路事件日志，按月滚动
+├── memory/episodes.jsonl         ← 会话消息原始记录（画像可重建的源）
+├── profile.json                  ← 用户画像（物化视图）
+└── trust.json                    ← 信任规则统计
+```
+
+- 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`。
+- 信任统计（`GET/DELETE /api/trust`）只记录人工对写操作的批准/拒绝次数，本轮**只观察、不做自动放行**（自动放行在后续阶段实现）。
+- 提炼只提取用户明确表达的偏好；健康、政治、宗教等敏感主题不提取。
+- 画像文件损坏时按空画像处理（fail-open，不阻断对话），损坏文件会改名 `.corrupted-<时间戳>` 保留。
 
 ## 技能目录
 

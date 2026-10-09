@@ -1,6 +1,8 @@
 package org.celanwang.mio.service;
 
 import org.celanwang.mio.config.ToolPolicies;
+import org.celanwang.mio.memory.MioLongTermMemory;
+import org.celanwang.mio.memory.TrustStore;
 import org.celanwang.mio.model.dto.ChatRequest;
 import org.celanwang.mio.model.vo.ChatResponse;
 import org.celanwang.mio.model.vo.ToolConfirmation;
@@ -53,6 +55,8 @@ public class ChatService {
     private final String modelName;
     private final String jevModel;
     private final TraceStore traceStore;
+    private final TrustStore trustStore;
+    private final MioLongTermMemory longTermMemory;
     private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
 
@@ -62,6 +66,8 @@ public class ChatService {
                        @Value("${app.dashscope.model-name:qwen3-max}") String modelName,
                        @Value("${app.jev.model:jev-latest}") String jevModel,
                        TraceStore traceStore,
+                       TrustStore trustStore,
+                       MioLongTermMemory longTermMemory,
                        ObjectMapper objectMapper) {
         this.agent = agent;
         this.jevClient = jevClient.getIfAvailable();
@@ -69,6 +75,8 @@ public class ChatService {
         this.modelName = modelName;
         this.jevModel = jevModel;
         this.traceStore = traceStore;
+        this.trustStore = trustStore;
+        this.longTermMemory = longTermMemory;
         this.objectMapper = objectMapper;
     }
 
@@ -96,6 +104,7 @@ public class ChatService {
                         throw new ResponseStatusException(HttpStatus.CONFLICT, "确认已失效，请开启新对话后重新提问。");
                     }
                     List<ConfirmResult> results = confirmResults(pending, decisions);
+                    recordTrust(pending, decisions);
                     traceStore.append(sessionId, "human", "confirm", "人工确认",
                             pending.stream()
                                     .map(call -> call.getName() + " → "
@@ -138,6 +147,7 @@ public class ChatService {
         return agent.call(List.of(message), context).flatMap(reply -> {
             String effectiveModel = traceRouting(sessionId, context);
             traceNewMessages(sessionId, context, before, effectiveModel);
+            recordLongTermMemory(context);
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null
                     || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {
@@ -170,6 +180,17 @@ public class ChatService {
                         return Mono.just(reply);
                     });
         });
+    }
+
+    /**
+     * 手动回调长期记忆 record：AgentScope 2.0.4 的 STATIC_CONTROL record 回调绑定默认会话，
+     * 本项目按请求自定义 sessionId，框架回调拿不到消息，故在此用当前会话上下文手动触发（异步、fail-open）。
+     */
+    private void recordLongTermMemory(RuntimeContext context) {
+        AgentState state = agent.getAgentState(context);
+        if (state != null) {
+            longTermMemory.record(state.getContext()).subscribe();
+        }
     }
 
     private Mono<Boolean> judgeWithJev(ToolUseBlock call, RuntimeContext context, String sessionId) {
@@ -313,6 +334,17 @@ public class ChatService {
             }
         }
         return List.of();
+    }
+
+    /** 只有人工确认计入信任统计；Jev 自动放行不算用户授权，不计入。 */
+    private void recordTrust(List<ToolUseBlock> pending, List<ChatRequest.Confirmation> decisions) {
+        for (ToolUseBlock call : pending) {
+            boolean approved = decisions.stream()
+                    .filter(d -> call.getId().equals(d.toolCallId()))
+                    .findFirst().map(ChatRequest.Confirmation::approved)
+                    .orElse(false);
+            trustStore.record(call.getName(), call.getInput(), approved);
+        }
     }
 
     private List<ConfirmResult> confirmResults(List<ToolUseBlock> pending,

@@ -1,6 +1,7 @@
 package org.celanwang.mio.config;
 
 import io.agentscope.core.ReActAgent;
+import io.agentscope.core.memory.LongTermMemoryMode;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.transport.HttpTransportConfig;
 import io.agentscope.core.model.transport.JdkHttpTransport;
@@ -15,10 +16,13 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.judge.jev.JevClient;
 import io.agentscope.extensions.judge.jev.example.JevModelRouterMiddleware;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import org.celanwang.mio.memory.MioLongTermMemory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
@@ -28,6 +32,7 @@ import java.time.Duration;
 public class AgentConfig {
 
     @Bean
+    @Primary
     public Model dashScopeModel(
             @Value("${app.dashscope.api-key}") String apiKey,
             @Value("${app.dashscope.model-name}") String modelName,
@@ -35,6 +40,17 @@ public class AgentConfig {
             @Value("${app.dashscope.proxy.host:}") String proxyHost,
             @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
         return buildModel(apiKey, modelName, baseUrl, proxyHost, proxyPort);
+    }
+
+    // 轻量模型独立成 Bean，供 Jev 路由中间件和画像提炼器共用。
+    @Bean
+    public Model dashScopeFastModel(
+            @Value("${app.dashscope.api-key}") String apiKey,
+            @Value("${app.dashscope.fast-model-name:qwen-flash}") String fastModelName,
+            @Value("${app.dashscope.base-url:}") String baseUrl,
+            @Value("${app.dashscope.proxy.host:}") String proxyHost,
+            @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
+        return buildModel(apiKey, fastModelName.trim(), baseUrl, proxyHost, proxyPort);
     }
 
     private Model buildModel(String apiKey, String modelName, String baseUrl,
@@ -62,16 +78,13 @@ public class AgentConfig {
     @Bean(destroyMethod = "close")
     public ReActAgent chatAgent(
             Model model,
+            @Qualifier("dashScopeFastModel") Model fastModel,
+            MioLongTermMemory longTermMemory,
             Toolkit toolkit,
             AgentSkillRepository skillRepository,
             ObjectProvider<JevClient> jevClient,
             @Value("${app.agent.name:智能助手}") String name,
-            @Value("${app.agent.sys-prompt}") String sysPrompt,
-            @Value("${app.dashscope.api-key}") String apiKey,
-            @Value("${app.dashscope.fast-model-name:qwen-flash}") String fastModelName,
-            @Value("${app.dashscope.base-url:}") String baseUrl,
-            @Value("${app.dashscope.proxy.host:}") String proxyHost,
-            @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
+            @Value("${app.agent.sys-prompt}") String sysPrompt) {
 
         var builder = ReActAgent.builder()
                 .name(name)
@@ -86,13 +99,15 @@ public class AgentConfig {
                 .toolkit(toolkit)
                 .skillRepository(skillRepository)
                 .stateStore(new InMemoryAgentStateStore())
-                .permissionContext(permissionContext());
+                .permissionContext(permissionContext())
+                // 长期记忆：STATIC_CONTROL 模式下框架自动注入画像并异步回调 record。
+                .longTermMemory(longTermMemory)
+                .longTermMemoryMode(LongTermMemoryMode.STATIC_CONTROL)
+                .longTermMemoryAsyncRecord(true);
 
         // Jev 可用时按请求复杂度路由模型：复杂任务用主模型，简单请求用轻量模型。
         JevClient jev = jevClient.getIfAvailable();
-        if (jev != null && StringUtils.hasText(fastModelName)
-                && !fastModelName.trim().equals(modelName(model))) {
-            Model fastModel = buildModel(apiKey, fastModelName.trim(), baseUrl, proxyHost, proxyPort);
+        if (jev != null && !modelName(fastModel).equals(modelName(model))) {
             builder.middleware(JevModelRouterMiddleware.builder(jev)
                     .choice("complex", model, "需要多步规划、工具编排、点餐下单、计算或复杂推理的请求")
                     .choice("simple", fastModel, "简单问答、闲聊或一步就能完成的查询")

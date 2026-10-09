@@ -1,5 +1,6 @@
 package org.celanwang.mio.trace;
 
+import org.celanwang.mio.memory.EventLogStore;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -11,12 +12,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 执行链路的内存存储：按会话保存事件，超出容量时淘汰最旧的会话和事件。
+ * 追加事件时同步持久化到事件日志（EventLogStore），所有埋点自动获得持久化。
  */
 @Component
 public class TraceStore {
 
     private static final int MAX_SESSIONS = 50;
     private static final int MAX_EVENTS_PER_SESSION = 500;
+
+    private final EventLogStore eventLogStore;
+
+    public TraceStore(EventLogStore eventLogStore) {
+        this.eventLogStore = eventLogStore;
+    }
 
     private final Map<String, CopyOnWriteArrayList<TraceEvent>> traces =
             Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
@@ -29,7 +37,9 @@ public class TraceStore {
     public void append(String sessionId, String node, String type, String title, String detail) {
         CopyOnWriteArrayList<TraceEvent> events =
                 traces.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>());
-        events.add(new TraceEvent(System.currentTimeMillis(), node, type, title, detail));
+        TraceEvent event = new TraceEvent(System.currentTimeMillis(), node, type, title, detail);
+        events.add(event);
+        eventLogStore.append(sessionId, event);
         while (events.size() > MAX_EVENTS_PER_SESSION) {
             events.remove(0);
         }
