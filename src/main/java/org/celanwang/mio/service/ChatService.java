@@ -84,7 +84,7 @@ public class ChatService {
                 boolean hasDecisions = decisions != null && !decisions.isEmpty();
                 if (!pending.isEmpty() && !hasDecisions) {
                     // 已暂停时直接重新展示确认卡片，避免把普通提问交给暂停中的 Agent。
-                    traceStore.append(sessionId, "ask", "等待人工确认",
+                    traceStore.append(sessionId, "human", "ask", "等待人工确认",
                             "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                     return Mono.just(response(sessionId, "请先选择是否允许下面的操作，再继续对话。", pending));
                 }
@@ -94,7 +94,7 @@ public class ChatService {
                         throw new ResponseStatusException(HttpStatus.CONFLICT, "确认已失效，请开启新对话后重新提问。");
                     }
                     List<ConfirmResult> results = confirmResults(pending, decisions);
-                    traceStore.append(sessionId, "confirm", "人工确认",
+                    traceStore.append(sessionId, "human", "confirm", "人工确认",
                             pending.stream()
                                     .map(call -> call.getName() + " → "
                                             + (decisions.stream()
@@ -109,7 +109,7 @@ public class ChatService {
                     if (!StringUtils.hasText(request.getMessage())) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入消息内容。");
                     }
-                    traceStore.append(sessionId, "user", "用户消息", request.getMessage());
+                    traceStore.append(sessionId, "user", "user", "用户消息", request.getMessage());
                     message = new UserMessage(request.getMessage());
                 }
                 List<String> autoApproved = new ArrayList<>();
@@ -139,7 +139,7 @@ public class ChatService {
             if (pending.isEmpty() || jevClient == null
                     || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {
                 if (!pending.isEmpty()) {
-                    traceStore.append(sessionId, "ask", "等待人工确认",
+                    traceStore.append(sessionId, "human", "ask", "等待人工确认",
                             "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                 }
                 return Mono.just(reply);
@@ -149,7 +149,7 @@ public class ChatService {
                     .collectList()
                     .flatMap(verdicts -> {
                         if (!verdicts.stream().allMatch(Boolean::booleanValue)) {
-                            traceStore.append(sessionId, "ask", "Jev 未通过，转人工确认",
+                            traceStore.append(sessionId, "human", "ask", "Jev 未通过，转人工确认",
                                     "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
                             return Mono.just(reply);
                         }
@@ -163,7 +163,7 @@ public class ChatService {
                     })
                     .onErrorResume(e -> {
                         log.warn("Jev 审核失败，转人工确认：{}", e.getMessage());
-                        traceStore.append(sessionId, "ask", "Jev 审核失败，转人工确认", e.getMessage());
+                        traceStore.append(sessionId, "human", "ask", "Jev 审核失败，转人工确认", e.getMessage());
                         return Mono.just(reply);
                     });
         });
@@ -187,7 +187,7 @@ public class ChatService {
                     ? noul.noul() : 0.0;
             boolean pass = probability >= jevThreshold;
             log.info("Jev 审核 {}：概率 {}，阈值 {}", call.getName(), probability, jevThreshold);
-            traceStore.append(sessionId, "jev", "Jev 审核 " + call.getName() + "（" + jevModel + "）",
+            traceStore.append(sessionId, "jev", "jev", "Jev 审核 " + call.getName() + "（" + jevModel + "）",
                     "概率 " + probability + " / 阈值 " + jevThreshold + (pass ? " → 自动执行" : " → 未通过"));
             return pass;
         });
@@ -210,18 +210,18 @@ public class ChatService {
             if (message.getRole() == MsgRole.ASSISTANT) {
                 for (TextBlock block : message.getContentBlocks(TextBlock.class)) {
                     if (StringUtils.hasText(block.getText())) {
-                        traceStore.append(sessionId, "model",
+                        traceStore.append(sessionId, "qwen", "model",
                                 "Qwen 输出（" + modelName + "）", truncate(block.getText(), 4000));
                     }
                 }
                 for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
-                    traceStore.append(sessionId, "tool_call",
+                    traceStore.append(sessionId, "tool:" + call.getName(), "tool_call",
                             "Qwen 发起工具调用 " + call.getName() + "（" + modelName + "）",
                             truncate(toJson(call.getInput()), 2000));
                 }
             } else if (message.getRole() == MsgRole.TOOL) {
                 for (ToolResultBlock result : message.getContentBlocks(ToolResultBlock.class)) {
-                    traceStore.append(sessionId, "tool_result",
+                    traceStore.append(sessionId, "tool:" + result.getName(), "tool_result",
                             "工具返回 " + result.getName() + "（" + result.getState() + "）",
                             truncate(outputText(result), 2000));
                 }

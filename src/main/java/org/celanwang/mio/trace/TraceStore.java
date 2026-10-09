@@ -26,10 +26,10 @@ public class TraceStore {
                 }
             });
 
-    public void append(String sessionId, String type, String title, String detail) {
+    public void append(String sessionId, String node, String type, String title, String detail) {
         CopyOnWriteArrayList<TraceEvent> events =
                 traces.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>());
-        events.add(new TraceEvent(System.currentTimeMillis(), type, title, detail));
+        events.add(new TraceEvent(System.currentTimeMillis(), node, type, title, detail));
         while (events.size() > MAX_EVENTS_PER_SESSION) {
             events.remove(0);
         }

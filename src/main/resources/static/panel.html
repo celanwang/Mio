@@ -22,7 +22,13 @@
     .session .sid { font-family: monospace; font-size: 12px; color: #8e8e93; }
     .session .preview { font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .session .meta { font-size: 11px; color: #636366; margin-top: 4px; }
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .tabs { display: flex; gap: 4px; padding: 10px 28px 0; border-bottom: 1px solid #26262e; }
+    .tab { padding: 6px 14px; font-size: 13px; color: #8e8e93; cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; }
+    .tab.active { color: #e5e5ea; border-bottom-color: #0a84ff; }
     #timeline { flex: 1; overflow-y: auto; padding: 20px 28px; }
+    #graph { flex: 1; overflow: auto; padding: 12px; display: none; }
+    #graph svg { width: 100%; height: 100%; min-height: 520px; }
     .empty { color: #636366; text-align: center; margin-top: 80px; font-size: 14px; }
     .event { position: relative; padding: 0 0 18px 28px; border-left: 2px solid #26262e; margin-left: 8px; }
     .event::before { content: ""; position: absolute; left: -7px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: #636366; }
@@ -58,10 +64,30 @@
 </header>
 <main>
   <aside id="sessions"></aside>
-  <div id="timeline"><div class="empty">选择左侧会话查看执行链路</div></div>
+  <div class="content">
+    <div class="tabs">
+      <button class="tab active" data-view="timeline">时间线</button>
+      <button class="tab" data-view="graph">链路图</button>
+    </div>
+    <div id="timeline"><div class="empty">选择左侧会话查看执行链路</div></div>
+    <div id="graph"></div>
+  </div>
 </main>
 <script>
 let activeSession = null;
+let view = 'timeline';
+let lastEvents = [];
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    view = tab.dataset.view;
+    document.getElementById('timeline').style.display = view === 'timeline' ? 'block' : 'none';
+    document.getElementById('graph').style.display = view === 'graph' ? 'block' : 'none';
+    render();
+  };
+});
 
 async function loadSessions() {
   const res = await fetch('/api/trace/sessions');
@@ -93,7 +119,16 @@ const TYPE_LABEL = { user: '用户', model: 'Qwen 模型', tool_call: 'Qwen · �
 async function loadEvents() {
   if (!activeSession) return;
   const res = await fetch('/api/trace/' + activeSession);
-  const events = await res.json();
+  lastEvents = await res.json();
+  render();
+}
+
+function render() {
+  if (view === 'timeline') renderTimeline(lastEvents);
+  else renderGraph(lastEvents);
+}
+
+function renderTimeline(events) {
   const box = document.getElementById('timeline');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   box.innerHTML = '';
@@ -116,6 +151,125 @@ async function loadEvents() {
     box.appendChild(div);
   }
   if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+/* ---------- 链路图 ---------- */
+
+const NODE_COLOR = { user: '#0a84ff', qwen: '#bf5af2', tool: '#ff9f0a', jev: '#64d2ff', human: '#ffd60a' };
+const NODE_LABEL = { user: '用户', qwen: 'Qwen 模型', jev: 'Jev 模型', human: '人工确认' };
+
+function nodeKind(id) {
+  return id.startsWith('tool:') ? 'tool' : id;
+}
+
+function buildGraph(events) {
+  const nodes = new Map();
+  const edges = new Map();
+  let prev = null;
+  for (const e of events) {
+    const id = e.node || 'qwen';
+    if (!nodes.has(id)) nodes.set(id, { id, count: 0 });
+    nodes.get(id).count++;
+    if (prev && prev !== id) {
+      // 同一条助手消息内的并行工具调用/返回不是真正的交接，不产生 tool→tool 边。
+      const artifact = nodeKind(prev) === 'tool' && nodeKind(id) === 'tool';
+      if (!artifact) {
+        const key = prev + '->' + id;
+        if (!edges.has(key)) edges.set(key, { from: prev, to: id, count: 0 });
+        edges.get(key).count++;
+      }
+    }
+    prev = id;
+  }
+  return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+function layoutNodes(nodes) {
+  // 固定泳道布局：用户在左，Qwen 居中，工具在右列，Jev 与人工在底部。
+  const pos = {};
+  const tools = nodes.filter(n => nodeKind(n.id) === 'tool');
+  for (const n of nodes) {
+    const kind = nodeKind(n.id);
+    if (kind === 'user') pos[n.id] = { x: 100, y: 300 };
+    else if (kind === 'qwen') pos[n.id] = { x: 370, y: 300 };
+    else if (kind === 'jev') pos[n.id] = { x: 370, y: 500 };
+    else if (kind === 'human') pos[n.id] = { x: 640, y: 500 };
+  }
+  tools.forEach((n, i) => {
+    const step = Math.min(90, 460 / Math.max(tools.length, 1));
+    pos[n.id] = { x: 660, y: 90 + i * step };
+  });
+  return pos;
+}
+
+function renderGraph(events) {
+  const box = document.getElementById('graph');
+  box.innerHTML = '';
+  if (!events.length) {
+    box.innerHTML = '<div class="empty">该会话暂无事件</div>';
+    return;
+  }
+  const { nodes, edges } = buildGraph(events);
+  const pos = layoutNodes(nodes);
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 800 600');
+
+  const defs = document.createElementNS(NS, 'defs');
+  defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 9 5 L 0 9 z" fill="#636366"/></marker>`;
+  svg.appendChild(defs);
+
+  const NW = 150, NH = 44;
+  for (const e of edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const reverse = edges.some(x => x.from === e.to && x.to === e.from);
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // 起止点收缩到节点边缘
+    const sx = a.x + (dx / len) * (NW / 2), sy = a.y + (dy / len) * (NH / 2 + 10);
+    const tx = b.x - (dx / len) * (NW / 2), ty = b.y - (dy / len) * (NH / 2 + 10);
+    const path = document.createElementNS(NS, 'path');
+    let d, lx, ly;
+    if (reverse) {
+      // 双向边错开弯曲
+      const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+      const nx = -dy / len, ny = dx / len;
+      const cx = mx + nx * 40, cy = my + ny * 40;
+      d = `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`;
+      lx = cx + nx * 6; ly = cy + ny * 6;
+    } else {
+      d = `M ${sx} ${sy} L ${tx} ${ty}`;
+      lx = (sx + tx) / 2; ly = (sy + ty) / 2 - 6;
+    }
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', '#636366');
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('marker-end', 'url(#arrow)');
+    svg.appendChild(path);
+    const label = document.createElementNS(NS, 'text');
+    label.setAttribute('x', lx); label.setAttribute('y', ly);
+    label.setAttribute('fill', '#8e8e93'); label.setAttribute('font-size', '11');
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = '×' + e.count;
+    svg.appendChild(label);
+  }
+
+  for (const n of nodes) {
+    const p = pos[n.id];
+    const kind = nodeKind(n.id);
+    const color = NODE_COLOR[kind] || '#636366';
+    const name = kind === 'tool' ? n.id.slice(5) : (NODE_LABEL[kind] || n.id);
+    const g = document.createElementNS(NS, 'g');
+    g.innerHTML = `<rect x="${p.x - NW / 2}" y="${p.y - NH / 2}" width="${NW}" height="${NH}" rx="10"
+        fill="#131318" stroke="${color}" stroke-width="1.5"/>
+      <text x="${p.x}" y="${p.y - 2}" fill="#e5e5ea" font-size="13" font-weight="600" text-anchor="middle">${escapeHtml(name)}</text>
+      <text x="${p.x}" y="${p.y + 15}" fill="#8e8e93" font-size="10" text-anchor="middle">${n.count} 次事件</text>`;
+    svg.appendChild(g);
+  }
+  box.appendChild(svg);
 }
 
 function formatTime(ts) {
