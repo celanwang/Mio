@@ -1,6 +1,6 @@
 # Mio
 
-个人 AI 助手 MVP：网页聊天 + 麦当劳点餐。基于 Java 17 + Spring Boot + AgentScope Java（DashScope 模型），麦当劳能力通过 MCP 接入，内置 `mcd-ordering` 技能指导点餐流程；涉及外部服务的工具操作会在页面上先征求你的确认。
+个人 AI 助手 MVP：网页聊天 + 麦当劳点餐。基于 Java 17 + Spring Boot + AgentScope Java（DashScope 模型），麦当劳能力通过 MCP 接入。模型自主识别意图、规划步骤并执行只读查询（菜单、价格、门店、订单等）；写操作（下单、取消、领券、积分兑换等）进入审核：配置 Jev 时先由 Jev 判断与用户意图的一致性，通过则自动执行，不通过或未配置 Jev 时转人工在页面上确认。
 
 ## 运行要求
 
@@ -28,6 +28,9 @@ chmod 600 .env
 | `MCD_MCP_TOKEN` | 麦当劳 MCP 令牌，在 [open.mcd.cn/mcp/doc](https://open.mcd.cn/mcp/doc) 控制台申请；填写有效 token 并把 `MCD_MCP_ENABLED` 设为 `true` 后才能点餐。 |
 | `DASHSCOPE_BASE_URL` | 可选，切换 DashScope 地域地址。 |
 | `DASHSCOPE_PROXY_HOST` / `DASHSCOPE_PROXY_PORT` | 可选，模型服务代理，默认端口 7890。 |
+| `TYPESAFE_API_KEY` | 可选，TypeSafe AI 的 Jev key。配置后写操作先由 Jev 审核，通过自动执行，不通过转人工；不配置则写操作一律转人工。 |
+| `JEV_ENABLED` | 可选，默认 `true`，设为 `false` 关闭 Jev 审核。 |
+| `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
 
 ## 试用示例
 
@@ -35,4 +38,4 @@ chmod 600 .env
 - 「获取我的可配送地址列表。」
 - 「帮我在附近的门店点一份巨无霸套餐。」
 
-下单等写操作会先在页面上弹出确认卡片，允许后才会真正执行。
+只读查询由模型自主完成；下单等写操作会进入审核——配置了 Jev 时审核通过会自动执行（回复中会注明），否则在页面上弹出确认卡片，允许后才会真正执行。
