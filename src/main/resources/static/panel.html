@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mio · 执行面板</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0a0a0f; color: #e5e5ea; height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 12px 20px; border-bottom: 1px solid #26262e; display: flex; align-items: center; gap: 16px; }
+    header h1 { font-size: 16px; font-weight: 600; }
+    header a { color: #8e8e93; text-decoration: none; font-size: 13px; }
+    header a:hover { color: #e5e5ea; }
+    .live { margin-left: auto; font-size: 12px; color: #30d158; display: flex; align-items: center; gap: 6px; }
+    .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #30d158; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+    main { flex: 1; display: flex; overflow: hidden; }
+    aside { width: 260px; border-right: 1px solid #26262e; overflow-y: auto; flex-shrink: 0; }
+    .session { padding: 12px 16px; border-bottom: 1px solid #1c1c22; cursor: pointer; }
+    .session:hover { background: #16161d; }
+    .session.active { background: #1c1c26; border-left: 3px solid #0a84ff; }
+    .session .sid { font-family: monospace; font-size: 12px; color: #8e8e93; }
+    .session .preview { font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session .meta { font-size: 11px; color: #636366; margin-top: 4px; }
+    #timeline { flex: 1; overflow-y: auto; padding: 20px 28px; }
+    .empty { color: #636366; text-align: center; margin-top: 80px; font-size: 14px; }
+    .event { position: relative; padding: 0 0 18px 28px; border-left: 2px solid #26262e; margin-left: 8px; }
+    .event::before { content: ""; position: absolute; left: -7px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: #636366; }
+    .event.user::before { background: #0a84ff; }
+    .event.model::before { background: #bf5af2; }
+    .event.tool_call::before { background: #ff9f0a; }
+    .event.tool_result::before { background: #30d158; }
+    .event.jev::before { background: #64d2ff; }
+    .event.confirm::before { background: #ffd60a; }
+    .event.ask::before { background: #ff453a; }
+    .event .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .badge { font-size: 11px; padding: 1px 8px; border-radius: 8px; background: #26262e; color: #a5a5ac; }
+    .event.user .badge { background: rgba(10,132,255,.18); color: #64a9ff; }
+    .event.model .badge { background: rgba(191,90,242,.18); color: #d29aff; }
+    .event.tool_call .badge { background: rgba(255,159,10,.18); color: #ffb84d; }
+    .event.tool_result .badge { background: rgba(48,209,88,.18); color: #63e086; }
+    .event.jev .badge { background: rgba(100,210,255,.18); color: #8fdcff; }
+    .event.confirm .badge { background: rgba(255,214,10,.18); color: #ffe14d; }
+    .event.ask .badge { background: rgba(255,69,58,.18); color: #ff8a80; }
+    .event .title { font-size: 14px; font-weight: 600; }
+    .event .time { font-size: 11px; color: #636366; font-family: monospace; }
+    .event details { margin-top: 6px; }
+    .event summary { font-size: 12px; color: #8e8e93; cursor: pointer; user-select: none; }
+    .event pre { margin-top: 6px; padding: 10px 12px; background: #131318; border: 1px solid #26262e; border-radius: 8px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow-y: auto; }
+    .event .detail-inline { margin-top: 6px; font-size: 13px; color: #c8c8ce; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Mio 执行面板</h1>
+  <a href="/">← 返回聊天</a>
+  <span class="live">实时刷新</span>
+</header>
+<main>
+  <aside id="sessions"></aside>
+  <div id="timeline"><div class="empty">选择左侧会话查看执行链路</div></div>
+</main>
+<script>
+let activeSession = null;
+
+async function loadSessions() {
+  const res = await fetch('/api/trace/sessions');
+  const sessions = await res.json();
+  const box = document.getElementById('sessions');
+  box.innerHTML = '';
+  if (!sessions.length) {
+    box.innerHTML = '<div class="empty" style="margin-top:40px">暂无会话</div>';
+    return;
+  }
+  for (const s of sessions) {
+    const div = document.createElement('div');
+    div.className = 'session' + (s.sessionId === activeSession ? ' active' : '');
+    div.innerHTML = `<div class="sid">${s.sessionId.slice(0, 8)}…</div>
+      <div class="preview">${escapeHtml(s.firstUserMessage || '（无用户消息）')}</div>
+      <div class="meta">${s.eventCount} 个事件 · ${formatTime(s.lastActive)}</div>`;
+    div.onclick = () => { activeSession = s.sessionId; loadSessions(); loadEvents(); };
+    box.appendChild(div);
+  }
+  if (!activeSession && sessions.length) {
+    activeSession = sessions[0].sessionId;
+    loadSessions();
+    loadEvents();
+  }
+}
+
+const TYPE_LABEL = { user: '用户', model: '模型', tool_call: '工具调用', tool_result: '工具返回', jev: 'Jev 审核', confirm: '人工确认', ask: '待确认' };
+
+async function loadEvents() {
+  if (!activeSession) return;
+  const res = await fetch('/api/trace/' + activeSession);
+  const events = await res.json();
+  const box = document.getElementById('timeline');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  box.innerHTML = '';
+  if (!events.length) {
+    box.innerHTML = '<div class="empty">该会话暂无事件</div>';
+    return;
+  }
+  for (const e of events) {
+    const div = document.createElement('div');
+    div.className = 'event ' + e.type;
+    const inline = e.detail && e.detail.length <= 120;
+    div.innerHTML = `<div class="head"><span class="badge">${TYPE_LABEL[e.type] || e.type}</span>
+      <span class="title">${escapeHtml(e.title)}</span>
+      <span class="time">${formatTime(e.timestamp)}</span></div>` +
+      (e.detail
+        ? inline
+          ? `<div class="detail-inline">${escapeHtml(e.detail)}</div>`
+          : `<details><summary>详情（${e.detail.length} 字符）</summary><pre>${escapeHtml(e.detail)}</pre></details>`
+        : '');
+    box.appendChild(div);
+  }
+  if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+loadSessions();
+setInterval(() => { loadSessions(); loadEvents(); }, 2000);
+</script>
+</body>
+</html>
