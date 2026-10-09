@@ -35,7 +35,7 @@ public class ProfileStore {
     private final ObjectMapper objectMapper;
     private List<ProfileEntry> entries;
 
-    public ProfileStore(@Value("${app.memory.dir:~/.mio}") String dir, ObjectMapper objectMapper) {
+    public ProfileStore(@Value("${app.memory.dir:./.mio}") String dir, ObjectMapper objectMapper) {
         this.file = JsonFileSupport.expandHome(dir).resolve("profile.json");
         this.objectMapper = objectMapper;
     }

@@ -1,4 +1,5 @@
 .env
+.mio/
 target/
 .idea/
 *.iml

@@ -47,8 +47,8 @@ app:
     skills-dir: ${MIO_SKILLS_DIR:./skills}
 
   memory:
-    # 用户画像与记忆数据目录（画像/信任/事件日志），默认用户主目录下 .mio。
-    dir: ${MIO_DATA_DIR:~/.mio}
+    # 用户画像与记忆数据目录（画像/信任/事件日志），默认项目根目录下 .mio（已 gitignore）。
+    dir: ${MIO_DATA_DIR:./.mio}
     distiller:
       # 是否用轻量模型从对话中提炼显式用户偏好。
       enabled: ${MIO_DISTILLER_ENABLED:true}

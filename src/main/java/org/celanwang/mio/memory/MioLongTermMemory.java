@@ -35,7 +35,7 @@ public class MioLongTermMemory implements LongTermMemory {
     /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
     private final Set<String> recentHashes = new LinkedHashSet<>();
 
-    public MioLongTermMemory(@Value("${app.memory.dir:~/.mio}") String dir,
+    public MioLongTermMemory(@Value("${app.memory.dir:./.mio}") String dir,
                              ProfileStore profileStore,
                              ProfileDistiller distiller,
                              ObjectMapper objectMapper) {

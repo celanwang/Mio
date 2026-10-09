@@ -25,7 +25,7 @@ public class TrustStore {
     private final ObjectMapper objectMapper;
     private List<TrustRule> rules;
 
-    public TrustStore(@Value("${app.memory.dir:~/.mio}") String dir, ObjectMapper objectMapper) {
+    public TrustStore(@Value("${app.memory.dir:./.mio}") String dir, ObjectMapper objectMapper) {
         this.file = JsonFileSupport.expandHome(dir).resolve("trust.json");
         this.objectMapper = objectMapper;
     }

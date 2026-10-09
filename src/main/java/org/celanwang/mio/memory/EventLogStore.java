@@ -26,7 +26,7 @@ public class EventLogStore {
     private final Path dir;
     private final ObjectMapper objectMapper;
 
-    public EventLogStore(@Value("${app.memory.dir:~/.mio}") String dir, ObjectMapper objectMapper) {
+    public EventLogStore(@Value("${app.memory.dir:./.mio}") String dir, ObjectMapper objectMapper) {
         this.dir = JsonFileSupport.expandHome(dir).resolve("memory");
         this.objectMapper = objectMapper;
     }
