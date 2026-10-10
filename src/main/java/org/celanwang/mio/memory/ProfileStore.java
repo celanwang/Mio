@@ -99,12 +99,16 @@ public class ProfileStore {
 
     /** 渲染为注入上下文用的中文文本（按 scope 分组）；空画像返回空串。 */
     public synchronized String render() {
-        List<ProfileEntry> active = entries();
-        if (active.isEmpty()) {
+        return renderEntries(entries());
+    }
+
+    /** 渲染指定条目列表（按 scope 分组）；空列表返回空串。供过滤后的注入复用。 */
+    public String renderEntries(List<ProfileEntry> entries) {
+        if (entries.isEmpty()) {
             return "";
         }
         Map<String, List<ProfileEntry>> byScope = new LinkedHashMap<>();
-        for (ProfileEntry entry : active) {
+        for (ProfileEntry entry : entries) {
             byScope.computeIfAbsent(entry.scope(), k -> new ArrayList<>()).add(entry);
         }
         StringBuilder text = new StringBuilder(RENDER_HEADER);

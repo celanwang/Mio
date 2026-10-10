@@ -55,3 +55,8 @@ app:
     habit-detector:
       # 是否从事件日志中统计习惯并生成自动化提议（提议仍需用户在面板批准才生效）。
       enabled: ${MIO_HABIT_DETECTOR_ENABLED:true}
+    inject:
+      # 画像注入是否按当前消息做相关性过滤；false 时回退为全量注入（用于对比/回滚）。
+      filter-enabled: ${MIO_INJECT_FILTER_ENABLED:true}
+      # 单次注入的画像条目数上限，超出时按置信度 × 新近度截断。
+      max-entries: ${MIO_INJECT_MAX_ENTRIES:30}

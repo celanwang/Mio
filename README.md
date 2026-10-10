@@ -36,14 +36,16 @@ chmod 600 .env
 | `MIO_DATA_DIR` | 可选，用户画像与记忆数据目录，默认项目根目录下的 `./.mio`（已被 `.gitignore` 排除）。 |
 | `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
+| `MIO_INJECT_FILTER_ENABLED` | 可选，默认 `true`，画像注入按当前消息相关性过滤（global 全量、领域条目按相关性）；设为 `false` 回退为全量注入。 |
+| `MIO_INJECT_MAX_ENTRIES` | 可选，单次画像注入条目数上限，默认 `30`，超出时按置信度 × 新近度截断。 |
 
 ## 用户画像与记忆
 
-对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼为用户画像，并在后续对话中作为参考信息注入（标注为非指令，优先级低于用户当次明确表达）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
+对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼为用户画像，并在后续对话中作为参考信息注入（标注为非指令，优先级低于用户当次明确表达）。注入时按当前消息做相关性过滤：`global` 作用域条目全量注入，领域（如 `mcd-ordering`）条目仅在命中领域别名或与消息有词面重叠时注入，并受条目数上限约束（可用 `MIO_INJECT_FILTER_ENABLED=false` 回退为全量注入）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
 
 ```
 .mio/
-├── memory/events-YYYY-MM.jsonl   ← 执行链路事件日志，按月滚动
+├── memory/events-YYYY-MM.jsonl   ← 执行链路事件日志，按月滚动（每行带 eventId 幂等键）
 ├── memory/episodes.jsonl         ← 会话消息原始记录（画像可重建的源）
 ├── profile.json                  ← 用户画像（物化视图）
 ├── trust.json                    ← 信任规则统计
