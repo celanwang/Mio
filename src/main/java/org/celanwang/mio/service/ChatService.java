@@ -308,20 +308,35 @@ public class ChatService {
         return text.substring(0, max) + "…";
     }
 
+    /**
+     * 组装 Jev 审核用的用户意图：最近 8 条用户消息 + 最近一条助手回复。
+     * 助手回复常含下单摘要（技能红线要求 create-order 前展示），
+     * 补入后「就要刚才那个」类指代表达才有可核对的依据。
+     */
     private String userIntent(RuntimeContext context) {
         AgentState state = agent.getAgentState(context);
         if (state == null) {
             return "";
         }
         List<Msg> messages = state.getContext();
-        StringBuilder intent = new StringBuilder();
+        StringBuilder userTexts = new StringBuilder();
+        String lastAssistantText = null;
         int count = 0;
-        for (int i = messages.size() - 1; i >= 0 && count < 8; i--) {
+        for (int i = messages.size() - 1; i >= 0 && (count < 8 || lastAssistantText == null); i--) {
             Msg message = messages.get(i);
-            if (message.getRole() == MsgRole.USER && StringUtils.hasText(message.getTextContent())) {
-                intent.insert(0, message.getTextContent() + "\n");
-                count++;
+            if (!StringUtils.hasText(message.getTextContent())) {
+                continue;
             }
+            if (message.getRole() == MsgRole.USER && count < 8) {
+                userTexts.insert(0, message.getTextContent() + "\n");
+                count++;
+            } else if (message.getRole() == MsgRole.ASSISTANT && lastAssistantText == null) {
+                lastAssistantText = message.getTextContent();
+            }
+        }
+        StringBuilder intent = new StringBuilder(userTexts);
+        if (lastAssistantText != null) {
+            intent.append("\n助手最近回复（供指代核对）：\n").append(truncate(lastAssistantText, 1000));
         }
         return intent.toString().trim();
     }
