@@ -1,5 +1,6 @@
 package org.celanwang.mio.memory;
 
+import org.celanwang.mio.config.DomainAliasRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,7 +9,6 @@ import org.springframework.util.StringUtils;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,21 +24,17 @@ public class ProfileInjector {
 
     private static final Logger log = LoggerFactory.getLogger(ProfileInjector.class);
 
-    /**
-     * 领域别名表：消息命中别名即视为该领域相关。
-     * 起步阶段内置硬编码；多场景后应由领域适配器/SKILL 提供（见记忆架构设计）。
-     */
-    private static final Map<String, Set<String>> DOMAIN_ALIASES = Map.of(
-            "mcd-ordering", Set.of("麦当劳", "巨无霸", "汉堡", "薯条", "门店", "套餐", "优惠券", "麦乐送"));
-
     private final WikiStore wikiStore;
+    private final DomainAliasRegistry aliasRegistry;
     private final boolean filterEnabled;
     private final int maxEntries;
 
     public ProfileInjector(WikiStore wikiStore,
+                           DomainAliasRegistry aliasRegistry,
                            @Value("${app.memory.inject.filter-enabled:true}") boolean filterEnabled,
                            @Value("${app.memory.inject.max-entries:30}") int maxEntries) {
         this.wikiStore = wikiStore;
+        this.aliasRegistry = aliasRegistry;
         this.filterEnabled = filterEnabled;
         this.maxEntries = maxEntries;
     }
@@ -70,7 +66,7 @@ public class ProfileInjector {
 
     /** domain 页相关性：领域别名命中，或页面内容与消息存在词面重叠。 */
     private boolean relevant(WikiPage page, String message) {
-        Set<String> aliases = DOMAIN_ALIASES.getOrDefault(page.scope(), Set.of());
+        Set<String> aliases = aliasRegistry.aliasesOf(page.scope());
         if (message.contains(page.scope()) || aliases.stream().anyMatch(message::contains)) {
             return true;
         }
