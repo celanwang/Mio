@@ -5,7 +5,7 @@ package org.celanwang.mio.trace;
  *
  * @param timestamp 事件时间（毫秒）
  * @param node      链路图节点：user / qwen / jev / human / tool:&lt;工具名&gt; / memory:inject
- * @param type      事件类型：user / model / tool_call / tool_result / jev / confirm / ask / inject_decision
+ * @param type      事件类型：user / model / tool_call / tool_result / jev / confirm / ask / inject_decision / jev_mismatch
  * @param title     展示标题
  * @param detail    详细内容（纯文本或 JSON）
  */

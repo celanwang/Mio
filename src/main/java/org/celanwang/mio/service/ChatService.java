@@ -39,7 +39,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,6 +63,19 @@ public class ChatService {
     private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
+    /** Jev 判定结果（toolCallId → 是否通过），供误拦信号比对；有界 LRU 防泄漏。 */
+    private final Map<String, Boolean> jevVerdicts = boundedMap(500);
+    /** 会话级自动放行 create-order 的时间，供误放行信号比对。 */
+    private final Map<String, Long> autoApprovedOrderAt = boundedMap(500);
+
+    private static <K, V> Map<K, V> boundedMap(int maxSize) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxSize;
+            }
+        });
+    }
 
     public ChatService(ReActAgent agent,
                        ObjectProvider<JevClient> jevClient,
@@ -108,7 +123,7 @@ public class ChatService {
                         throw new ResponseStatusException(HttpStatus.CONFLICT, "确认已失效，请开启新对话后重新提问。");
                     }
                     List<ConfirmResult> results = confirmResults(pending, decisions);
-                    recordTrust(pending, decisions);
+                    recordTrust(sessionId, pending, decisions);
                     traceStore.append(sessionId, "human", "confirm", "人工确认",
                             pending.stream()
                                     .map(call -> call.getName() + " → "
@@ -172,6 +187,9 @@ public class ChatService {
                             return Mono.just(reply);
                         }
                         autoApproved.addAll(pending.stream().map(ToolUseBlock::getName).toList());
+                        if (pending.stream().anyMatch(call -> "create-order".equals(call.getName()))) {
+                            autoApprovedOrderAt.put(sessionId, System.currentTimeMillis());
+                        }
                         List<ConfirmResult> results = pending.stream()
                                 .map(call -> new ConfirmResult(true, call)).toList();
                         UserMessage resume = UserMessage.builder()
@@ -215,9 +233,11 @@ public class ChatService {
             double probability = answer instanceof NoulAnswer noul && noul.noul() != null
                     ? noul.noul() : 0.0;
             boolean pass = probability >= jevThreshold;
+            jevVerdicts.put(call.getId(), pass);
             log.info("Jev 审核 {}：概率 {}，阈值 {}", call.getName(), probability, jevThreshold);
             traceStore.append(sessionId, "jev", "jev", "Jev 审核 " + call.getName() + "（" + jevModel + "）",
-                    "概率 " + probability + " / 阈值 " + jevThreshold + (pass ? " → 自动执行" : " → 未通过"));
+                    "概率 " + probability + " / 阈值 " + jevThreshold + (pass ? " → 自动执行" : " → 未通过")
+                            + "，callId " + call.getId());
             return pass;
         });
     }
@@ -266,6 +286,7 @@ public class ChatService {
                     traceStore.append(sessionId, "tool:" + call.getName(), "tool_call",
                             "Qwen 发起工具调用 " + call.getName() + "（" + effectiveModel + "）",
                             truncate(toJson(call.getInput()), 2000));
+                    detectRegretSignal(sessionId, call.getName());
                 }
             } else if (message.getRole() == MsgRole.TOOL) {
                 for (ToolResultBlock result : message.getContentBlocks(ToolResultBlock.class)) {
@@ -274,6 +295,21 @@ public class ChatService {
                             truncate(outputText(result), 2000));
                 }
             }
+        }
+    }
+
+    /**
+     * 误放行信号（疑似）：Jev 自动放行 create-order 后 30 分钟内出现 cancel-order，
+     * 说明自动执行的可能并非用户真实意图。只是统计信号（用户也可能正常改主意），供阈值调优参考。
+     */
+    private void detectRegretSignal(String sessionId, String toolName) {
+        if (!"cancel-order".equals(toolName)) {
+            return;
+        }
+        Long approvedAt = autoApprovedOrderAt.remove(sessionId);
+        if (approvedAt != null && System.currentTimeMillis() - approvedAt < 30 * 60 * 1000) {
+            traceStore.append(sessionId, "jev", "jev_mismatch", "Jev 误放行信号（疑似）",
+                    "create-order 自动放行后 30 分钟内用户发起 cancel-order");
         }
     }
 
@@ -356,14 +392,20 @@ public class ChatService {
         return List.of();
     }
 
-    /** 只有人工确认计入信任统计；Jev 自动放行不算用户授权，不计入。 */
-    private void recordTrust(List<ToolUseBlock> pending, List<ChatRequest.Confirmation> decisions) {
+    /** 只有人工确认计入信任统计；Jev 自动放行不算用户授权，不计入。Jev 拦截后用户批准记为误拦信号。 */
+    private void recordTrust(String sessionId, List<ToolUseBlock> pending,
+                             List<ChatRequest.Confirmation> decisions) {
         for (ToolUseBlock call : pending) {
             boolean approved = decisions.stream()
                     .filter(d -> call.getId().equals(d.toolCallId()))
                     .findFirst().map(ChatRequest.Confirmation::approved)
                     .orElse(false);
             trustStore.record(call.getName(), call.getInput(), approved);
+            Boolean jevPass = jevVerdicts.remove(call.getId());
+            if (approved && Boolean.FALSE.equals(jevPass)) {
+                traceStore.append(sessionId, "jev", "jev_mismatch", "Jev 误拦信号",
+                        call.getName() + " 被 Jev 拦截，转人工后用户批准（callId " + call.getId() + "）");
+            }
         }
     }
 
