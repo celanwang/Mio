@@ -62,6 +62,10 @@ app:
       filter-enabled: ${MIO_INJECT_FILTER_ENABLED:true}
       # 规则未命中的领域页是否交轻量模型二次判定相关性（超时/失败倒向不注入）。
       llm-filter-enabled: ${MIO_INJECT_LLM_FILTER_ENABLED:true}
+      # 是否启用画像页向量召回（页面变更异步建内存索引，embedding 不可用时静默降级）。
+      vector-enabled: ${MIO_INJECT_VECTOR_ENABLED:true}
+      # 向量召回余弦相似度阈值（初始经验值，待 inject_decision 留痕数据校准）。
+      vector-min-score: ${MIO_INJECT_VECTOR_MIN_SCORE:0.5}
       # 单次注入的画像条目数上限，超出时按置信度 × 新近度截断。
       max-entries: ${MIO_INJECT_MAX_ENTRIES:30}
     rag:
