@@ -60,6 +60,8 @@ app:
     inject:
       # 画像注入是否按当前消息做相关性过滤；false 时回退为全量注入（用于对比/回滚）。
       filter-enabled: ${MIO_INJECT_FILTER_ENABLED:true}
+      # 规则未命中的领域页是否交轻量模型二次判定相关性（超时/失败倒向不注入）。
+      llm-filter-enabled: ${MIO_INJECT_LLM_FILTER_ENABLED:true}
       # 单次注入的画像条目数上限，超出时按置信度 × 新近度截断。
       max-entries: ${MIO_INJECT_MAX_ENTRIES:30}
     rag:

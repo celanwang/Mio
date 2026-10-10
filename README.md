@@ -62,6 +62,7 @@ chmod 600 .env
 | `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
 | `MIO_INJECT_FILTER_ENABLED` | 可选，默认 `true`，画像注入按当前消息相关性过滤（global 全量、领域条目按相关性）；设为 `false` 回退为全量注入。 |
+| `MIO_INJECT_LLM_FILTER_ENABLED` | 可选，默认 `true`，规则未命中的领域页由轻量模型二次判定相关性（超时/失败倒向不注入）；设为 `false` 只走确定性规则。 |
 | `MIO_INJECT_MAX_ENTRIES` | 可选，单次画像注入条目数上限，默认 `30`，超出时按置信度 × 新近度截断。 |
 | `DASHSCOPE_EMBEDDING_MODEL` | 可选，向量化模型名（默认 `text-embedding-v4`），episode 情景回忆检索用。 |
 | `MIO_RAG_ENABLED` | 可选，默认 `true`，设为 `false` 关闭情景回忆检索；embedding 不可用时自动静默降级，不影响对话。 |
@@ -69,7 +70,7 @@ chmod 600 .env
 
 ## 用户画像与记忆
 
-对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼并维护为**画像 Wiki 页**（每页一个 Markdown 文件，YAML frontmatter 记录来源/置信度/更新时间，可整页持续改写），提炼时同步产出实体关系三元组（实体簿，为后续意图消歧打底）。注入时按当前消息做相关性过滤：`global` 作用域页面全量注入，领域（如 `mcd-ordering`）页面仅在命中领域别名或与消息有词面重叠时注入（领域别名由技能包 `SKILL.md` frontmatter 的 `aliases` 字段声明；可用 `MIO_INJECT_FILTER_ENABLED=false` 回退为全量注入）；同时按当前消息向量召回相关的历史对话片段，作为「历史回忆」参考段注入（阈值过滤，宁缺毋滥）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
+对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼并维护为**画像 Wiki 页**（每页一个 Markdown 文件，YAML frontmatter 记录来源/置信度/更新时间，可整页持续改写），提炼时同步产出实体关系三元组（实体簿，为后续意图消歧打底）。注入时按当前消息做相关性过滤：`global` 作用域页面全量注入，领域（如 `mcd-ordering`）页面按相关性注入：先走确定性规则（命中领域别名或词面重叠），规则未命中的再由轻量模型批量二次判定（领域别名由技能包 `SKILL.md` frontmatter 的 `aliases` 字段声明；可用 `MIO_INJECT_FILTER_ENABLED=false` 回退为全量注入）；同时按当前消息向量召回相关的历史对话片段，作为「历史回忆」参考段注入（阈值过滤，宁缺毋滥）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
 
 ```
 .mio/
