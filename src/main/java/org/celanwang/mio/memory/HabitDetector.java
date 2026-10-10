@@ -18,8 +18,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -46,21 +44,19 @@ public class HabitDetector {
     private final Path eventsDir;
     private final ObjectMapper objectMapper;
     private final AutomationStore automationStore;
+    private final MemoryTaskExecutor taskExecutor;
     private final boolean enabled;
     private final AtomicLong lastRunAt = new AtomicLong();
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "habit-detector");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     public HabitDetector(@Value("${app.memory.dir:./.mio}") String dir,
                          @Value("${app.memory.habit-detector.enabled:true}") boolean enabled,
                          AutomationStore automationStore,
+                         MemoryTaskExecutor taskExecutor,
                          ObjectMapper objectMapper) {
         this.eventsDir = JsonFileSupport.expandHome(dir).resolve("memory");
         this.enabled = enabled;
         this.automationStore = automationStore;
+        this.taskExecutor = taskExecutor;
         this.objectMapper = objectMapper;
     }
 
@@ -73,7 +69,7 @@ public class HabitDetector {
         if (now - lastRunAt.get() < THROTTLE_MILLIS || !lastRunAt.compareAndSet(lastRunAt.get(), now)) {
             return;
         }
-        executor.execute(() -> {
+        taskExecutor.execute(() -> {
             try {
                 detect();
             } catch (Exception e) {

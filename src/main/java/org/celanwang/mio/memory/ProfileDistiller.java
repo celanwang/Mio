@@ -14,8 +14,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * 画像提炼器：用轻量模型从最近的用户消息中提取显式表达的用户偏好写入画像。
@@ -39,20 +37,18 @@ public class ProfileDistiller {
     private final Model fastModel;
     private final ProfileStore profileStore;
     private final ObjectMapper objectMapper;
+    private final MemoryTaskExecutor taskExecutor;
     private final boolean enabled;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "profile-distiller");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     public ProfileDistiller(@Qualifier("dashScopeFastModel") Model fastModel,
                             ProfileStore profileStore,
                             ObjectMapper objectMapper,
+                            MemoryTaskExecutor taskExecutor,
                             @Value("${app.memory.distiller.enabled:true}") boolean enabled) {
         this.fastModel = fastModel;
         this.profileStore = profileStore;
         this.objectMapper = objectMapper;
+        this.taskExecutor = taskExecutor;
         this.enabled = enabled;
     }
 
@@ -61,7 +57,7 @@ public class ProfileDistiller {
         if (!enabled || !StringUtils.hasText(userText)) {
             return;
         }
-        executor.execute(() -> {
+        taskExecutor.execute(() -> {
             try {
                 doDistill(userText);
             } catch (Exception e) {
