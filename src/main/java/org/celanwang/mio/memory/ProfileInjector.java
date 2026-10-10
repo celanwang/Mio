@@ -12,12 +12,12 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 画像注入器：按当前用户消息的相关性过滤画像条目后渲染注入文本。
+ * 画像注入器：按当前用户消息的相关性过滤画像 Wiki 页后渲染注入文本。
  * 规则（确定性，不用 LLM/embedding）：
- * 1. global 条目全量保留（跨场景恒真的基本盘）；
- * 2. domain 条目仅当命中领域别名，或条目 key/value 与消息有词面重叠时保留；
+ * 1. global 页全量保留（跨场景恒真的基本盘）；
+ * 2. domain 页仅当命中领域别名，或页标题/正文与消息有词面重叠时保留；
  * 3. 超过 maxEntries 时按置信度 × 新近度截断。
- * 开关关闭或消息为空时回退为全量注入（旧行为）。
+ * 开关关闭或消息为空时回退为全量注入。
  */
 @Component
 public class ProfileInjector {
@@ -31,30 +31,30 @@ public class ProfileInjector {
     private static final Map<String, Set<String>> DOMAIN_ALIASES = Map.of(
             "mcd-ordering", Set.of("麦当劳", "巨无霸", "汉堡", "薯条", "门店", "套餐", "优惠券", "麦乐送"));
 
-    private final ProfileStore profileStore;
+    private final WikiStore wikiStore;
     private final boolean filterEnabled;
     private final int maxEntries;
 
-    public ProfileInjector(ProfileStore profileStore,
+    public ProfileInjector(WikiStore wikiStore,
                            @Value("${app.memory.inject.filter-enabled:true}") boolean filterEnabled,
                            @Value("${app.memory.inject.max-entries:30}") int maxEntries) {
-        this.profileStore = profileStore;
+        this.wikiStore = wikiStore;
         this.filterEnabled = filterEnabled;
         this.maxEntries = maxEntries;
     }
 
     /** 渲染注入文本；currentUserText 为当前用户消息，可为空（空则全量注入）。 */
     public String render(String currentUserText) {
-        List<ProfileEntry> all = profileStore.entries();
+        List<WikiPage> all = wikiStore.pages();
         if (all.isEmpty()) {
             return "";
         }
         if (!filterEnabled || !StringUtils.hasText(currentUserText)) {
-            return profileStore.renderEntries(all);
+            return wikiStore.render(all);
         }
-        List<ProfileEntry> selected = all.stream()
-                .filter(entry -> ProfileStore.SCOPE_GLOBAL.equals(entry.scope())
-                        || relevant(entry, currentUserText))
+        List<WikiPage> selected = all.stream()
+                .filter(page -> WikiStore.SCOPE_GLOBAL.equals(page.scope())
+                        || relevant(page, currentUserText))
                 .sorted((a, b) -> {
                     int byConfidence = Double.compare(b.confidence(), a.confidence());
                     return byConfidence != 0 ? byConfidence
@@ -63,19 +63,19 @@ public class ProfileInjector {
                 .limit(Math.max(maxEntries, 1))
                 .toList();
         if (selected.size() < all.size()) {
-            log.info("画像注入过滤：{} 条候选 → 注入 {} 条", all.size(), selected.size());
+            log.info("画像注入过滤：{} 页候选 → 注入 {} 页", all.size(), selected.size());
         }
-        return profileStore.renderEntries(selected);
+        return wikiStore.render(selected);
     }
 
-    /** domain 条目相关性：领域别名命中，或条目内容与消息存在词面重叠。 */
-    private boolean relevant(ProfileEntry entry, String message) {
-        Set<String> aliases = DOMAIN_ALIASES.getOrDefault(entry.scope(), Set.of());
-        if (message.contains(entry.scope()) || aliases.stream().anyMatch(message::contains)) {
+    /** domain 页相关性：领域别名命中，或页面内容与消息存在词面重叠。 */
+    private boolean relevant(WikiPage page, String message) {
+        Set<String> aliases = DOMAIN_ALIASES.getOrDefault(page.scope(), Set.of());
+        if (message.contains(page.scope()) || aliases.stream().anyMatch(message::contains)) {
             return true;
         }
-        String entryText = entry.key() + entry.value();
-        return tokens(message).stream().anyMatch(entryText::contains);
+        String pageText = page.title() + page.content();
+        return tokens(message).stream().anyMatch(pageText::contains);
     }
 
     /** 提取匹配用 token：连续 CJK 字符的 2-gram + 长度 ≥3 的 ASCII 小写词。 */

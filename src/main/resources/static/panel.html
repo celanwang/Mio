@@ -158,21 +158,35 @@ const AUTOMATION_STATUS_LABEL = { PROPOSED: '待决定', ACTIVE: '已批准', RE
 
 async function renderProfile() {
   const box = document.getElementById('profile');
-  const [entries, rules, automations] = await Promise.all([
+  const [entries, rules, automations, entities] = await Promise.all([
     fetch('/api/profile').then(r => r.json()),
     fetch('/api/trust').then(r => r.json()),
-    fetch('/api/automations').then(r => r.json())
+    fetch('/api/automations').then(r => r.json()),
+    fetch('/api/entities').then(r => r.json())
   ]);
-  let html = '<h2>用户画像</h2>';
+  let html = '<h2>用户画像（Wiki 页）</h2>';
   if (!entries.length) {
-    html += '<div class="empty" style="margin-top:20px">暂无画像条目</div>';
+    html += '<div class="empty" style="margin-top:20px">暂无画像页面</div>';
   } else {
-    html += '<table><tr><th>作用域</th><th>偏好</th><th>内容</th><th>来源</th><th>置信度</th><th></th></tr>';
+    html += '<table><tr><th>作用域</th><th>页面</th><th>内容</th><th>来源</th><th>置信度</th><th></th></tr>';
     for (const e of entries) {
-      html += `<tr><td>${escapeHtml(e.scope)}</td><td>${escapeHtml(e.key)}</td><td>${escapeHtml(e.value)}</td>` +
+      const content = e.content || '';
+      const preview = content.length > 60 ? content.slice(0, 60) + '…' : content;
+      html += `<tr><td>${escapeHtml(e.scope)}</td><td>${escapeHtml(e.title)}</td>` +
+        `<td title="${escapeHtml(content)}">${escapeHtml(preview)}</td>` +
         `<td><span class="src ${e.source}">${SOURCE_LABEL[e.source] || e.source}</span></td>` +
         `<td>${e.confidence.toFixed(2)}</td>` +
-        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.scope)}','${encodeURIComponent(e.key)}')">删除</button></td></tr>`;
+        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.slug)}')">删除</button></td></tr>`;
+    }
+    html += '</table>';
+  }
+  html += '<h2>实体簿（对话中提炼的实体关系，供后续意图消歧使用）</h2>';
+  if (!entities.length) {
+    html += '<div class="empty" style="margin-top:20px">暂无实体关系</div>';
+  } else {
+    html += '<table><tr><th>主体</th><th>关系</th><th>客体</th></tr>';
+    for (const t of entities) {
+      html += `<tr><td>${escapeHtml(t.subject)}</td><td>${escapeHtml(t.predicate)}</td><td>${escapeHtml(t.object)}</td></tr>`;
     }
     html += '</table>';
   }
@@ -210,8 +224,8 @@ async function renderProfile() {
   box.innerHTML = html;
 }
 
-async function deleteProfile(scope, key) {
-  await fetch('/api/profile?scope=' + scope + '&key=' + key, { method: 'DELETE' });
+async function deleteProfile(slug) {
+  await fetch('/api/profile?slug=' + slug, { method: 'DELETE' });
   renderProfile();
 }
 
