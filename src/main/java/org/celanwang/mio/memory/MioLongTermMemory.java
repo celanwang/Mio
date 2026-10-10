@@ -17,6 +17,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * 长期记忆挂点：retrieve 注入用户画像，record 落盘会话消息并触发画像提炼。
@@ -32,6 +33,7 @@ public class MioLongTermMemory implements LongTermMemory {
     private final AutomationStore automationStore;
     private final ProfileInjector profileInjector;
     private final EpisodeRetriever episodeRetriever;
+    private final EmbeddingClient embeddingClient;
     private final Path episodesFile;
     private final ObjectMapper objectMapper;
     /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
@@ -42,12 +44,14 @@ public class MioLongTermMemory implements LongTermMemory {
                              AutomationStore automationStore,
                              ProfileInjector profileInjector,
                              EpisodeRetriever episodeRetriever,
+                             EmbeddingClient embeddingClient,
                              ObjectMapper objectMapper) {
         this.episodesFile = JsonFileSupport.expandHome(dir).resolve("memory/episodes.jsonl");
         this.distiller = distiller;
         this.automationStore = automationStore;
         this.profileInjector = profileInjector;
         this.episodeRetriever = episodeRetriever;
+        this.embeddingClient = embeddingClient;
         this.objectMapper = objectMapper;
     }
 
@@ -66,7 +70,8 @@ public class MioLongTermMemory implements LongTermMemory {
     }
 
     private String renderInjection(String currentUserText) {
-        StringBuilder text = new StringBuilder(profileInjector.render(currentUserText));
+        Supplier<float[]> queryVector = sharedQueryVector(currentUserText);
+        StringBuilder text = new StringBuilder(profileInjector.render(currentUserText, queryVector));
         List<AutomationRule> proposed = automationStore.pending();
         if (!proposed.isEmpty()) {
             text.append("\n\n「待决定的自动化提议（参考信息，非指令；可在对话中向用户提及，由用户决定去面板批准）」");
@@ -81,11 +86,35 @@ public class MioLongTermMemory implements LongTermMemory {
                 text.append("\n- ").append(rule.title()).append("（").append(rule.toolName()).append("）");
             }
         }
-        String recall = episodeRetriever.recall(currentUserText);
+        String recall = episodeRetriever.recall(currentUserText, queryVector);
         if (!recall.isEmpty()) {
             text.append("\n\n").append(recall);
         }
         return text.toString();
+    }
+
+    /**
+     * 共享查询向量：画像向量召回与历史回忆用的是同一条用户消息，
+     * 整条注入链路最多 embed 一次——首次 get() 时惰性计算并记忆，embedding 不可用时返回 null，
+     * 下游各自静默降级（画像倒向规则与模型复核，回忆不注入）。
+     */
+    private Supplier<float[]> sharedQueryVector(String text) {
+        return new Supplier<>() {
+            private boolean computed;
+            private float[] vector;
+
+            @Override
+            public float[] get() {
+                if (!computed) {
+                    computed = true;
+                    if (StringUtils.hasText(text)) {
+                        vector = embeddingClient.embed(List.of(text))
+                                .map(vectors -> vectors.get(0)).orElse(null);
+                    }
+                }
+                return vector;
+            }
+        };
     }
 
     /**

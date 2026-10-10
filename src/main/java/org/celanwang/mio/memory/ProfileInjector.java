@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * 画像注入器：按当前用户消息的相关性过滤画像 Wiki 页后渲染注入文本。三级判定：
@@ -101,8 +102,8 @@ public class ProfileInjector {
         this.maxEntries = maxEntries;
     }
 
-    /** 渲染注入文本；currentUserText 为当前用户消息，可为空（空则全量注入）。 */
-    public String render(String currentUserText) {
+    /** 渲染注入文本；currentUserText 为当前用户消息（空则全量注入），queryVector 为注入链路的共享查询向量。 */
+    public String render(String currentUserText, Supplier<float[]> queryVector) {
         List<WikiPage> all = wikiStore.pages();
         if (all.isEmpty()) {
             return "";
@@ -129,15 +130,14 @@ public class ProfileInjector {
         }
         if (vectorEnabled && !undecided.isEmpty()) {
             indexPagesAsync(undecided);
-            Optional<List<float[]>> query = embeddingClient.embed(List.of(currentUserText));
-            if (query.isPresent()) {
-                float[] queryVector = query.get().get(0);
+            float[] sharedVector = queryVector.get();
+            if (sharedVector != null) {
                 undecided.removeIf(page -> {
                     float[] vector = pageVectors.get(page.slug());
                     if (vector == null) {
                         return false;
                     }
-                    double score = cosine(queryVector, vector);
+                    double score = cosine(sharedVector, vector);
                     if (score >= vectorMinScore) {
                         selected.add(page);
                         reasonBySlug.put(page.slug(),

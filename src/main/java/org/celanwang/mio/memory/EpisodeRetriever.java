@@ -21,11 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * 情景回忆检索器：episode 的向量化索引与检索编排（RAG Lv0）。
  * 写路径：新 episode 异步 embed 后入 {@link VectorStore}；启动时回填无向量的历史 episode。
- * 读路径：当前消息 embed → 余弦 top-k → 阈值过滤 → 渲染「历史回忆」注入段。
+ * 读路径：共享查询向量（注入链路每条消息最多 embed 一次）→ 余弦 top-k → 阈值过滤 → 渲染「历史回忆」注入段。
  * 全链路 fail-open：embedding 不可用时检索静默降级，对话不受任何影响。
  */
 @Component
@@ -93,18 +94,18 @@ public class EpisodeRetriever implements ApplicationRunner {
         taskExecutor.execute(() -> embedAndUpsert(List.of(new Pending(id, text))));
     }
 
-    /** 渲染「历史回忆」注入段；无命中/开关关闭/任何失败时返回空串。 */
-    public String recall(String query) {
+    /** 渲染「历史回忆」注入段；queryVector 为注入链路的共享查询向量（null 表示 embedding 不可用）。无命中/开关关闭/任何失败时返回空串。 */
+    public String recall(String query, Supplier<float[]> queryVector) {
         if (!enabled || !StringUtils.hasText(query) || vectorStore.size() == 0) {
             return "";
         }
         try {
-            Optional<List<float[]>> embedded = embeddingClient.embed(List.of(query));
-            if (embedded.isEmpty()) {
+            float[] vector = queryVector.get();
+            if (vector == null) {
                 return "";
             }
             StringBuilder section = new StringBuilder();
-            for (VectorStore.ScoredId hit : vectorStore.search(embedded.get().get(0), topK)) {
+            for (VectorStore.ScoredId hit : vectorStore.search(vector, topK)) {
                 Meta meta = metaById.get(hit.id());
                 if (meta == null || hit.score() < minScore) {
                     continue;
