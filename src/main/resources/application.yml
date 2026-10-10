@@ -29,6 +29,8 @@ app:
     model-name: qwen3-max
     # 轻量模型：配置 Jev 后由 Jev 按请求复杂度路由，简单请求走该模型。
     fast-model-name: ${DASHSCOPE_FAST_MODEL:qwen-flash}
+    # 向量化模型：episode 情景回忆检索用（历史消息 embedding）。
+    embedding-model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
 
   jev:
     # 是否启用 Jev 决策审核：写操作先由 Jev 判断，通过则自动执行，不通过转人工确认。
@@ -60,3 +62,9 @@ app:
       filter-enabled: ${MIO_INJECT_FILTER_ENABLED:true}
       # 单次注入的画像条目数上限，超出时按置信度 × 新近度截断。
       max-entries: ${MIO_INJECT_MAX_ENTRIES:30}
+    rag:
+      # 是否启用 episode 情景回忆检索（embedding 不可用时自动静默降级，不影响对话）。
+      enabled: ${MIO_RAG_ENABLED:true}
+      # 单次召回条数上限 / 余弦相似度阈值（宁缺毋滥，低于阈值不注入）。
+      top-k: ${MIO_RAG_TOP_K:3}
+      min-score: ${MIO_RAG_MIN_SCORE:0.6}

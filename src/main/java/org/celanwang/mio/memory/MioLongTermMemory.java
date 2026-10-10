@@ -31,6 +31,7 @@ public class MioLongTermMemory implements LongTermMemory {
     private final ProfileDistiller distiller;
     private final AutomationStore automationStore;
     private final ProfileInjector profileInjector;
+    private final EpisodeRetriever episodeRetriever;
     private final Path episodesFile;
     private final ObjectMapper objectMapper;
     /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
@@ -40,17 +41,19 @@ public class MioLongTermMemory implements LongTermMemory {
                              ProfileDistiller distiller,
                              AutomationStore automationStore,
                              ProfileInjector profileInjector,
+                             EpisodeRetriever episodeRetriever,
                              ObjectMapper objectMapper) {
         this.episodesFile = JsonFileSupport.expandHome(dir).resolve("memory/episodes.jsonl");
         this.distiller = distiller;
         this.automationStore = automationStore;
         this.profileInjector = profileInjector;
+        this.episodeRetriever = episodeRetriever;
         this.objectMapper = objectMapper;
     }
 
     /**
-     * 返回注入文本（画像按当前消息相关性过滤 + 自动化提议 + 已授权例行事项），由框架
-     * （STATIC_CONTROL 模式）注入到本次调用的上下文中；无任何内容时返回空串。
+     * 返回注入文本（画像按当前消息相关性过滤 + 自动化提议 + 已授权例行事项 + 历史回忆），
+     * 由框架（STATIC_CONTROL 模式）注入到本次调用的上下文中；无任何内容时返回空串。
      * 全部标注为参考信息而非指令。
      */
     @Override
@@ -77,6 +80,10 @@ public class MioLongTermMemory implements LongTermMemory {
             for (AutomationRule rule : active) {
                 text.append("\n- ").append(rule.title()).append("（").append(rule.toolName()).append("）");
             }
+        }
+        String recall = episodeRetriever.recall(currentUserText);
+        if (!recall.isEmpty()) {
+            text.append("\n\n").append(recall);
         }
         return text.toString();
     }
@@ -119,11 +126,13 @@ public class MioLongTermMemory implements LongTermMemory {
     private void appendEpisode(MsgRole role, String text) {
         try {
             Files.createDirectories(episodesFile.getParent());
-            String line = objectMapper.writeValueAsString(new Episode(
-                    System.currentTimeMillis(),
-                    role == MsgRole.USER ? "user" : "assistant", text));
+            long timestamp = System.currentTimeMillis();
+            String roleName = role == MsgRole.USER ? "user" : "assistant";
+            String line = objectMapper.writeValueAsString(new Episode(timestamp, roleName, text));
             Files.writeString(episodesFile, line + "\n",
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            episodeRetriever.indexAsync(
+                    EpisodeRetriever.episodeId(roleName, timestamp, text), roleName, timestamp, text);
         } catch (Exception e) {
             log.warn("会话消息落盘失败（不影响主流程）：{}", e.getMessage());
         }

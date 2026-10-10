@@ -63,24 +63,33 @@ chmod 600 .env
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
 | `MIO_INJECT_FILTER_ENABLED` | 可选，默认 `true`，画像注入按当前消息相关性过滤（global 全量、领域条目按相关性）；设为 `false` 回退为全量注入。 |
 | `MIO_INJECT_MAX_ENTRIES` | 可选，单次画像注入条目数上限，默认 `30`，超出时按置信度 × 新近度截断。 |
+| `DASHSCOPE_EMBEDDING_MODEL` | 可选，向量化模型名（默认 `text-embedding-v4`），episode 情景回忆检索用。 |
+| `MIO_RAG_ENABLED` | 可选，默认 `true`，设为 `false` 关闭情景回忆检索；embedding 不可用时自动静默降级，不影响对话。 |
+| `MIO_RAG_TOP_K` / `MIO_RAG_MIN_SCORE` | 可选，单次召回条数上限（默认 `3`）与余弦相似度阈值（默认 `0.6`，低于阈值不注入）。 |
 
 ## 用户画像与记忆
 
-对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼为用户画像，并在后续对话中作为参考信息注入（标注为非指令，优先级低于用户当次明确表达）。注入时按当前消息做相关性过滤：`global` 作用域条目全量注入，领域（如 `mcd-ordering`）条目仅在命中领域别名或与消息有词面重叠时注入，并受条目数上限约束（可用 `MIO_INJECT_FILTER_ENABLED=false` 回退为全量注入）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
+对话中的显式偏好（口味/忌口、常用地址、预算、回复风格等）会由轻量模型自动提炼并维护为**画像 Wiki 页**（每页一个 Markdown 文件，YAML frontmatter 记录来源/置信度/更新时间，可整页持续改写），提炼时同步产出实体关系三元组（实体簿，为后续意图消歧打底）。注入时按当前消息做相关性过滤：`global` 作用域页面全量注入，领域（如 `mcd-ordering`）页面仅在命中领域别名或与消息有词面重叠时注入（可用 `MIO_INJECT_FILTER_ENABLED=false` 回退为全量注入）；同时按当前消息向量召回相关的历史对话片段，作为「历史回忆」参考段注入（阈值过滤，宁缺毋滥）。数据全部落盘在本地数据目录（默认项目根目录下的 `./.mio`，已被 `.gitignore` 排除，不会入库）：
 
 ```
 .mio/
-├── memory/events-YYYY-MM.jsonl   ← 执行链路事件日志，按月滚动（每行带 eventId 幂等键）
-├── memory/episodes.jsonl         ← 会话消息原始记录（画像可重建的源）
-├── profile.json                  ← 用户画像（物化视图）
-├── trust.json                    ← 信任规则统计
-└── automations.json              ← 自动化规则（习惯提议 → 用户批准 → 生效）
+├── memory/events-YYYY-MM.jsonl    ← 执行链路事件日志，按月滚动（每行带 eventId 幂等键）
+├── memory/episodes.jsonl          ← 会话消息原始记录（画像可重建的源）
+├── memory/episodes-vectors.jsonl  ← episode 向量索引（embedding，可随时重建）
+├── wiki/index.md                  ← 画像 Wiki 目录（自动重建）
+├── wiki/global/*.md               ← 全局画像页（跨场景恒真）
+├── wiki/domains/<领域>/*.md       ← 领域画像页（按场景隔离）
+├── entities.jsonl                 ← 实体簿：三元组 + 双时态字段（KG 的 Lv0 形态）
+├── trust.json                     ← 信任规则统计
+└── automations.json               ← 自动化规则（习惯提议 → 用户批准 → 生效）
 ```
 
-- 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`。
+旧版扁平画像 `profile.json` 在首次启动时自动迁移为 Wiki 页，原文件改名 `profile.json.migrated` 保留可查。
+
+- 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`（按 slug 操作整页）；实体簿只读观察：`GET /api/entities`。
 - 信任统计（`GET/DELETE /api/trust`）只记录人工对写操作的批准/拒绝次数，本轮**只观察、不做自动放行**（自动放行在后续阶段实现）。
 - 提炼只提取用户明确表达的偏好；健康、政治、宗教等敏感主题不提取。
-- 画像文件损坏时按空画像处理（fail-open，不阻断对话），损坏文件会改名 `.corrupted-<时间戳>` 保留。
+- 画像页文件损坏时改名 `.corrupted-<时间戳>` 保留并跳过（fail-open，不阻断对话）。
 
 ### 自动化规则（习惯发现 → 提议 → 批准 → 会话开始执行）
 
@@ -102,9 +111,9 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | 1 | 画像注入相关性过滤；事件发布/异步任务接缝；事件幂等键 | ✅ 已完成 |
-| 2 | 画像 Wiki 化：扁平 KV → 按作用域组织的主题页（参考 Karpathy LLM Wiki 模式），提炼器升级为页面改写，顺手产出实体三元组 | 未开始 |
-| 3 | episodes 向量检索（DashScope embedding + 本地内存余弦起步，服务情景回忆与意图消歧） | 未开始 |
-| 4 | 意图识别消费记忆：域先验 + 消歧检索 | 未开始 |
+| 2 | 画像 Wiki 化：扁平 KV → 按作用域组织的主题页（参考 Karpathy LLM Wiki 模式），提炼器升级为整页改写，顺手产出实体三元组 | ✅ 已完成 |
+| 3 | episodes 向量检索 Lv0（DashScope embedding + 本地内存余弦，服务情景回忆与意图消歧） | ✅ 已完成 |
+| 4 | 意图识别消费记忆：域先验 + 消歧检索（实体簿接入消费方） | 未开始 |
 | 5+ | 云端中间件（托管向量库 / Redis / MQ / 图库）：均留有接缝与量化触发条件，信号出现才接入，本地模式永远可用 | 按信号触发 |
 
 ## 试用示例（首个场景：麦当劳点餐）
