@@ -86,7 +86,7 @@ public class ProfileInjector {
                            @Value("${app.memory.inject.filter-enabled:true}") boolean filterEnabled,
                            @Value("${app.memory.inject.llm-filter-enabled:true}") boolean llmFilterEnabled,
                            @Value("${app.memory.inject.vector-enabled:true}") boolean vectorEnabled,
-                           @Value("${app.memory.inject.vector-min-score:0.5}") double vectorMinScore,
+                           @Value("${app.memory.inject.vector-min-score:0.35}") double vectorMinScore,
                            @Value("${app.memory.inject.max-entries:30}") int maxEntries) {
         this.wikiStore = wikiStore;
         this.aliasRegistry = aliasRegistry;

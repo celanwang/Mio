@@ -63,7 +63,7 @@ chmod 600 .env
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
 | `MIO_INJECT_FILTER_ENABLED` | 可选，默认 `true`，画像注入按当前消息相关性过滤（global 全量、领域条目按相关性）；设为 `false` 回退为全量注入。 |
 | `MIO_INJECT_LLM_FILTER_ENABLED` | 可选，默认 `true`，规则未命中的领域页由轻量模型二次判定相关性（超时/失败倒向不注入）；设为 `false` 只走确定性规则。 |
-| `MIO_INJECT_VECTOR_ENABLED` / `MIO_INJECT_VECTOR_MIN_SCORE` | 可选，画像页向量召回开关（默认 `true`）与余弦阈值（默认 `0.5`，初始经验值，待注入留痕数据校准）；embedding 不可用时静默降级。 |
+| `MIO_INJECT_VECTOR_ENABLED` / `MIO_INJECT_VECTOR_MIN_SCORE` | 可选，画像页向量召回开关（默认 `true`）与余弦阈值（默认 `0.35`，已用真实 embedding 数据校准：相关对 0.40–0.58、无关对 ≤0.30）；embedding 不可用时静默降级。 |
 | `MIO_INJECT_MAX_ENTRIES` | 可选，单次画像注入条目数上限，默认 `30`，超出时按置信度 × 新近度截断。 |
 | `DASHSCOPE_EMBEDDING_MODEL` | 可选，向量化模型名（默认 `text-embedding-v4`），episode 情景回忆检索用。 |
 | `MIO_RAG_ENABLED` | 可选，默认 `true`，设为 `false` 关闭情景回忆检索；embedding 不可用时自动静默降级，不影响对话。 |
