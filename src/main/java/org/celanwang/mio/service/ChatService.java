@@ -82,7 +82,7 @@ public class ChatService {
                        WeiboMcpService weibo,
                        ObjectProvider<JevClient> jevClient,
                        @Value("${app.jev.auto-approve-threshold:0.8}") double jevThreshold,
-                       @Value("${app.dashscope.model-name:qwen3-max}") String modelName,
+                       @Value("${app.dashscope.model-name:qwen3.8-max}") String modelName,
                        @Value("${app.jev.model:jev-latest}") String jevModel,
                        TraceStore traceStore,
                        TrustStore trustStore,

@@ -44,11 +44,11 @@ app:
       port: ${DASHSCOPE_PROXY_PORT:7890}
     api-key: ${DASHSCOPE_API_KEY:}
     # 主模型：可用 DASHSCOPE_MODEL 覆盖（账号需有对应模型权限，否则 DashScope 返回 404 model_not_found）。
-    model-name: ${DASHSCOPE_MODEL:qwen3-max}
+    model-name: ${DASHSCOPE_MODEL:qwen3.8-max}
     # 轻量模型：配置 Jev 后由 Jev 按请求复杂度路由，简单请求走该模型。
-    fast-model-name: ${DASHSCOPE_FAST_MODEL:qwen-flash}
-    # 标准模型：Jev 路由的中间档，点餐/打车/微博等工具流程任务走该模型。
-    plus-model-name: ${DASHSCOPE_PLUS_MODEL:qwen-plus}
+    fast-model-name: ${DASHSCOPE_FAST_MODEL:qwen3.8-flash}
+    # 标准模型：Jev 路由的中间档，点餐/打车/微博等工具流程任务走该模型（qwen3.8 系列无 plus 档）。
+    plus-model-name: ${DASHSCOPE_PLUS_MODEL:qwen3.7-plus}
     # 向量化模型：episode 情景回忆检索用（历史消息 embedding）。
     embedding-model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
 

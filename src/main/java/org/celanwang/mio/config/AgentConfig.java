@@ -46,7 +46,7 @@ public class AgentConfig {
     @Bean
     public Model dashScopeFastModel(
             @Value("${app.dashscope.api-key}") String apiKey,
-            @Value("${app.dashscope.fast-model-name:qwen-flash}") String fastModelName,
+            @Value("${app.dashscope.fast-model-name:qwen3.8-flash}") String fastModelName,
             @Value("${app.dashscope.base-url:}") String baseUrl,
             @Value("${app.dashscope.proxy.host:}") String proxyHost,
             @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
@@ -57,7 +57,7 @@ public class AgentConfig {
     @Bean
     public Model dashScopePlusModel(
             @Value("${app.dashscope.api-key}") String apiKey,
-            @Value("${app.dashscope.plus-model-name:qwen-plus}") String plusModelName,
+            @Value("${app.dashscope.plus-model-name:qwen3.7-plus}") String plusModelName,
             @Value("${app.dashscope.base-url:}") String baseUrl,
             @Value("${app.dashscope.proxy.host:}") String proxyHost,
             @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
