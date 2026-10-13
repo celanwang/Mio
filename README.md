@@ -62,7 +62,7 @@ chmod 600 .env
 | `TENCENT_RIDE_PYTHON` / `TENCENT_RIDE_CITY` | 可选，Python 解释器路径（默认 `python`）与常住城市（留空则打车时主动询问本次城市）。 |
 | `DASHSCOPE_BASE_URL` | 可选，切换 DashScope 地域地址。 |
 | `DASHSCOPE_PROXY_HOST` / `DASHSCOPE_PROXY_PORT` | 可选，模型服务代理，默认端口 7890。 |
-| `DASHSCOPE_MODEL` | 可选，主模型名（默认 `qwen3-max`）。配置 Jev 后由 Jev 按请求复杂度路由：长任务/高要求内容走该模型。账号无该模型权限时 DashScope 返回 404，可改为 `qwen-max` 等。 |
+| `DASHSCOPE_MODEL` | 可选，主模型名（默认 `qwen3-max`）。配置 Jev 后由 Jev 按请求复杂度路由：长任务/高要求内容走该模型。账号无该模型权限时 DashScope 返回 404，可改为 `qwen-plus`（`qwen-max` 输入上限 30k，微博工具全量注册后会超限，不建议）。 |
 | `DASHSCOPE_PLUS_MODEL` | 可选，标准模型名（默认 `qwen-plus`）。Jev 路由的中间档：点餐、打车、微博等工具流程任务走该模型。 |
 | `DASHSCOPE_FAST_MODEL` | 可选，轻量模型名（默认 `qwen-flash`）。Jev 路由的简单档：闲聊与一步查询走该模型。 |
 | `TYPESAFE_API_KEY` | 可选，TypeSafe AI 的 Jev key。配置后写操作先由 Jev 审核，通过自动执行，不通过转人工；不配置则写操作一律转人工。 |
