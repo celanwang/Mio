@@ -2,20 +2,18 @@ package org.celanwang.mio.memory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 /**
- * {@link VectorStore} 的 PG 实现（app.memory.store=pg 时启用）：向量落 embeddings 表，
+ * {@link VectorStore} 的 PG 实现（唯一实现）：向量落 embeddings 表，
  * 检索用 pgvector 余弦距离（{@code <=>}，score = 1 - 距离即余弦相似度）。
  * 不引 pgvector-java 客户端：向量以 '[1,2,3]'::vector 字面量写入。
  * 失败方向 fail-open：PG 不可达时检索返回空、contains 返回 false、写入只 warn。
  */
 @Component
-@ConditionalOnProperty(name = "app.memory.store", havingValue = "pg")
 public class PgVectorStore implements VectorStore {
 
     private static final Logger log = LoggerFactory.getLogger(PgVectorStore.class);

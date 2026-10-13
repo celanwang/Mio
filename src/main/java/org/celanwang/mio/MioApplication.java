@@ -5,8 +5,8 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 
-// DataSource 由 config.PgMemoryConfig 按 app.memory.store=pg 条件自建，
-// 默认 local 模式下没有数据库，排除自动装配避免无 url 时启动失败。
+// DataSource 由 config.PgMemoryConfig 自建（PG 是唯一记忆后端），
+// 排除自动装配避免与自建连接池冲突。
 @SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
 public class MioApplication {
 

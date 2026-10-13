@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
@@ -16,12 +15,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * PG 记忆存储配置（app.memory.store=pg 时生效）：连接池、JdbcTemplate 与启动自建表
+ * PG 记忆存储配置（默认装配，PG 是唯一记忆后端）：连接池、JdbcTemplate 与启动自建表
  * （项目无 Flyway 惯例，CREATE TABLE IF NOT EXISTS 幂等自建）。
  * 失败方向 fail-open：PG 不可达不阻断启动，记忆链路 warn + 静默降级。
  */
 @Configuration
-@ConditionalOnProperty(name = "app.memory.store", havingValue = "pg")
 public class PgMemoryConfig {
 
     private static final Logger log = LoggerFactory.getLogger(PgMemoryConfig.class);

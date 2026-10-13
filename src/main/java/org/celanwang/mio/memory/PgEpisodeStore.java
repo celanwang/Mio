@@ -2,19 +2,17 @@ package org.celanwang.mio.memory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 /**
- * {@link EpisodeStore} 的 PG 实现（app.memory.store=pg 时启用）：episode 原文落 messages 表，
+ * {@link EpisodeStore} 的 PG 实现（唯一实现）：episode 原文落 messages 表，
  * 按 id 幂等（ON CONFLICT DO NOTHING）。与向量同库，保证向量引用的原文一定可取到。
  * best-effort：写失败只 warn，读失败返回空。
  */
 @Component
-@ConditionalOnProperty(name = "app.memory.store", havingValue = "pg")
 public class PgEpisodeStore implements EpisodeStore {
 
     private static final Logger log = LoggerFactory.getLogger(PgEpisodeStore.class);

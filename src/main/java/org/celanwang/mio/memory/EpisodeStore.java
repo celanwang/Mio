@@ -4,8 +4,7 @@ import java.util.List;
 
 /**
  * episode 原文存储接缝：会话消息原始记录（画像可重建的源）的追加与读取。
- * 本地实现为 JSONL 落盘（{@link LocalEpisodeStore}，默认）；PG 实现（{@link PgEpisodeStore}）
- * 与向量同库，保证向量引用的 episode 原文一定可取到。
+ * 唯一实现为 PG（{@link PgEpisodeStore}），与向量同库，保证向量引用的 episode 原文一定可取到。
  * 实现必须 best-effort：写失败只 warn，绝不阻断对话。
  */
 public interface EpisodeStore {

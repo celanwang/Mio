@@ -4,8 +4,7 @@ import java.util.List;
 
 /**
  * 实体簿接缝：画像相关的实体关系（三元组）存储。
- * 实现按 app.memory.store 切换：local（默认）为本地 JSONL（{@link LocalEntityStore}），
- * pg 为 PostgreSQL 落表（{@link PgEntityStore}）；未来出现真实多跳查询需求时
+ * 唯一实现为 PG 落表（{@link PgEntityStore}）；未来出现真实多跳查询需求时
  * 可替换为图库实现，消费方不感知。
  */
 public interface EntityStore {

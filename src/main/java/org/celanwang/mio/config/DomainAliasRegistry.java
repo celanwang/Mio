@@ -1,6 +1,5 @@
 package org.celanwang.mio.config;
 
-import org.celanwang.mio.memory.JsonFileSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,8 +26,16 @@ public class DomainAliasRegistry {
     private final Map<String, Set<String>> aliasesByDomain;
 
     public DomainAliasRegistry(@Value("${app.agent.skills-dir:./skills}") String skillsDir) {
-        this.aliasesByDomain = scan(JsonFileSupport.expandHome(skillsDir));
+        this.aliasesByDomain = scan(expandHome(skillsDir));
         log.info("领域别名已加载：{}", aliasesByDomain.keySet());
+    }
+
+    /** Spring 不会展开路径开头的 ~，这里手动展开为用户主目录。 */
+    private static Path expandHome(String path) {
+        if (path != null && path.startsWith("~")) {
+            return Path.of(System.getProperty("user.home") + path.substring(1));
+        }
+        return Path.of(path);
     }
 
     /** 某领域的别名集合；未知领域返回空集。 */

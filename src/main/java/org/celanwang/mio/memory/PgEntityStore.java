@@ -2,7 +2,6 @@ package org.celanwang.mio.memory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -10,12 +9,11 @@ import org.springframework.util.StringUtils;
 import java.util.List;
 
 /**
- * {@link EntityStore} 的 PG 实现（app.memory.store=pg 时启用）：三元组落 entities 表，
- * 去重语义与本地实现一致（同主谓宾且未失效的条目不重复写入）。
+ * {@link EntityStore} 的 PG 实现（唯一实现）：三元组落 entities 表，
+ * 去重语义：同主谓宾且未失效的条目不重复写入。
  * best-effort：写失败只 warn，读失败返回空。
  */
 @Component
-@ConditionalOnProperty(name = "app.memory.store", havingValue = "pg")
 public class PgEntityStore implements EntityStore {
 
     private static final Logger log = LoggerFactory.getLogger(PgEntityStore.class);
