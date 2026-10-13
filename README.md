@@ -31,10 +31,11 @@
 
 - JDK 17
 
-## 文档
+## 数据库与部署
 
-- [docs/db](docs/db/)：数据库表结构设计（7 张表定稿 DDL 与设计规则）
-- [docs/deploy](docs/deploy/)：记忆层基础设施部署（PG + Redis,docker compose）
+- **表结构定稿**:[docs/db/schema.sql](docs/db/schema.sql)——7 张表 `events` / `messages` / `embeddings` / `entities` / `profiles` / `trusts` / `automations`，设计规则（表名单词复数、主键统一 `id`、五种字段类型、派生态与真相源隔离、变更纪律）见文件头注释。当前代码实装的是改名前的 4 张（events / episodes / episode_vectors / entities），改名与三张新表随记忆层改造落地。
+- **基础设施**:[docs/deploy/docker-compose.yml](docs/deploy/docker-compose.yml)——PG + pgvector（长期记忆/唯一真相源）+ Redis（短期记忆，AOF everysec，`maxmemory 256mb` + `allkeys-lru`,key 全部可弃）。密码经该目录 `.env` 注入（`PG_PASSWORD` / `REDIS_PASSWORD`，勿提交）；安全组 5432/6379 必须配置可信 IP 白名单，禁止 `0.0.0.0/0`；应用与数据库同机部署时改绑 `127.0.0.1` 并关闭安全组端口。
+- **故障方向**:Redis 不可达回退进程内存（fail-open，重启丢会话）;PG 不可达时画像/回忆静默降级（fail-open)，信任/自动化倒向全部人工确认（fail-closed)。PG 是唯一真相源，`pg_dump` 定时备份挂在演进路线。
 
 ## 启动
 
@@ -78,6 +79,7 @@ chmod 600 .env
 | `MIO_RAG_TOP_K` / `MIO_RAG_MIN_SCORE` | 可选，单次召回条数上限（默认 `3`）与余弦相似度阈值（默认 `0.6`，低于阈值不注入）。 |
 | `MIO_MEMORY_STORE` | 可选，记录型数据（事件日志/episode 原文/向量/实体三元组）存储后端：`local`（默认，本地 JSONL）或 `pg`（PostgreSQL + pgvector）。画像 Wiki/信任/自动化规则始终是本地文件，不受此开关影响。 |
 | `MIO_PG_JDBC_URL` / `MIO_PG_USERNAME` / `MIO_PG_PASSWORD` | `MIO_MEMORY_STORE=pg` 时必填，PostgreSQL 连接信息（库需启用 vector 扩展；表结构启动时自建）。 |
+| `MIO_REDIS_HOST` / `MIO_REDIS_PORT` / `MIO_REDIS_PASSWORD` | 可选，短期记忆 Redis 连接信息；**预留配置，代码侧尚未接入**，接入后留空则回退进程内存（fail-open）。 |
 
 ## 用户画像与记忆
 
