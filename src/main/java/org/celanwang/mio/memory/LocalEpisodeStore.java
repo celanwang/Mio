@@ -37,7 +37,7 @@ public class LocalEpisodeStore implements EpisodeStore {
         try {
             Files.createDirectories(file.getParent());
             String line = objectMapper.writeValueAsString(
-                    new EpisodeLine(episode.timestamp(), episode.role(), episode.text()));
+                    new EpisodeLine(episode.timestamp(), episode.sessionId(), episode.role(), episode.text()));
             Files.writeString(file, line + "\n",
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (Exception e) {
@@ -61,7 +61,7 @@ public class LocalEpisodeStore implements EpisodeStore {
                     EpisodeLine parsed = objectMapper.readValue(line, EpisodeLine.class);
                     episodes.add(new Episode(
                             EpisodeRetriever.episodeId(parsed.role(), parsed.timestamp(), parsed.text()),
-                            parsed.timestamp(), parsed.role(), parsed.text()));
+                            parsed.sessionId(), parsed.timestamp(), parsed.role(), parsed.text()));
                 } catch (Exception e) {
                     // 单行损坏跳过，不影响整体
                 }
@@ -72,7 +72,7 @@ public class LocalEpisodeStore implements EpisodeStore {
         return episodes;
     }
 
-    /** episodes.jsonl 的单行结构（与历史文件格式一致，id 不落盘、由原文重算）。 */
-    private record EpisodeLine(long timestamp, String role, String text) {
+    /** episodes.jsonl 的单行结构（与历史文件格式一致，id 不落盘、由原文重算；旧行无 sessionId 字段，读取时为 null）。 */
+    private record EpisodeLine(long timestamp, String sessionId, String role, String text) {
     }
 }

@@ -48,7 +48,7 @@ public class PgMemoryConfig {
         return new JdbcTemplate(memoryDataSource);
     }
 
-    /** 启动自建表：embedding 模型 text-embedding-v4 维度 1024，向量列固定 vector(1024)。 */
+    /** 启动自建表：DDL 与 docs/db/schema.sql 定稿保持一致（7 张表），embedding 模型 text-embedding-v4 维度 1024，向量列固定 vector(1024)。 */
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
     ApplicationRunner pgMemorySchemaInitializer(JdbcTemplate memoryJdbcTemplate) {
@@ -57,7 +57,7 @@ public class PgMemoryConfig {
                 memoryJdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS vector");
                 memoryJdbcTemplate.execute("""
                         CREATE TABLE IF NOT EXISTS events (
-                            event_id   TEXT PRIMARY KEY,
+                            id         TEXT PRIMARY KEY,
                             ts         BIGINT NOT NULL,
                             session_id TEXT,
                             node       TEXT,
@@ -66,16 +66,23 @@ public class PgMemoryConfig {
                             detail     TEXT
                         )
                         """);
+                memoryJdbcTemplate.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts)");
                 memoryJdbcTemplate.execute("""
-                        CREATE TABLE IF NOT EXISTS episodes (
-                            id   TEXT PRIMARY KEY,
-                            ts   BIGINT NOT NULL,
-                            role TEXT NOT NULL,
-                            text TEXT NOT NULL
+                        CREATE TABLE IF NOT EXISTS messages (
+                            id         TEXT PRIMARY KEY,
+                            session_id TEXT,
+                            ts         BIGINT NOT NULL,
+                            role       TEXT NOT NULL,
+                            text       TEXT NOT NULL
                         )
                         """);
+                memoryJdbcTemplate.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)");
+                memoryJdbcTemplate.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts)");
                 memoryJdbcTemplate.execute("""
-                        CREATE TABLE IF NOT EXISTS episode_vectors (
+                        CREATE TABLE IF NOT EXISTS embeddings (
                             id        TEXT PRIMARY KEY,
                             embedding vector(1024) NOT NULL
                         )
@@ -91,7 +98,47 @@ public class PgMemoryConfig {
                             source_ts  BIGINT NOT NULL
                         )
                         """);
-                log.info("PG 记忆存储表结构就绪（events / episodes / episode_vectors / entities）");
+                memoryJdbcTemplate.execute("""
+                        CREATE TABLE IF NOT EXISTS profiles (
+                            id              TEXT PRIMARY KEY,
+                            scope           TEXT NOT NULL,
+                            title           TEXT NOT NULL,
+                            source          TEXT NOT NULL,
+                            confidence      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                            content         TEXT NOT NULL,
+                            source_messages TEXT[],
+                            created_at      BIGINT,
+                            updated_at      BIGINT NOT NULL
+                        )
+                        """);
+                memoryJdbcTemplate.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope)");
+                memoryJdbcTemplate.execute("""
+                        CREATE TABLE IF NOT EXISTS trusts (
+                            tool_name        TEXT NOT NULL,
+                            param_signature  TEXT NOT NULL,
+                            approvals        INTEGER NOT NULL DEFAULT 0,
+                            rejections       INTEGER NOT NULL DEFAULT 0,
+                            last_decision_at BIGINT NOT NULL,
+                            PRIMARY KEY (tool_name, param_signature)
+                        )
+                        """);
+                memoryJdbcTemplate.execute("""
+                        CREATE TABLE IF NOT EXISTS automations (
+                            id           TEXT PRIMARY KEY,
+                            title        TEXT NOT NULL,
+                            tool_name    TEXT NOT NULL,
+                            trigger_kind TEXT NOT NULL,
+                            status       TEXT NOT NULL DEFAULT 'PROPOSED'
+                                         CHECK (status IN ('PROPOSED', 'ACTIVE', 'REJECTED')),
+                            reason       TEXT NOT NULL,
+                            created_at   BIGINT NOT NULL,
+                            decided_at   BIGINT
+                        )
+                        """);
+                memoryJdbcTemplate.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_automations_status ON automations(status)");
+                log.info("PG 记忆存储表结构就绪（events / messages / embeddings / entities / profiles / trusts / automations）");
             } catch (Exception e) {
                 log.warn("PG 记忆存储建表失败（fail-open，记忆链路静默降级）：{}", e.getMessage());
             }

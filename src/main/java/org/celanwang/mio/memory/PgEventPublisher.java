@@ -29,9 +29,9 @@ public class PgEventPublisher implements EventPublisher {
     public void publish(String sessionId, TraceEvent event) {
         try {
             jdbc.update("""
-                    INSERT INTO events(event_id, ts, session_id, node, type, title, detail)
+                    INSERT INTO events(id, ts, session_id, node, type, title, detail)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (event_id) DO NOTHING
+                    ON CONFLICT (id) DO NOTHING
                     """, UUID.randomUUID().toString(), event.timestamp(), sessionId,
                     event.node(), event.type(), event.title(), event.detail());
         } catch (Exception e) {

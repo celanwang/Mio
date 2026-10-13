@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * {@link EpisodeStore} 的 PG 实现（app.memory.store=pg 时启用）：episode 原文落 episodes 表，
+ * {@link EpisodeStore} 的 PG 实现（app.memory.store=pg 时启用）：episode 原文落 messages 表，
  * 按 id 幂等（ON CONFLICT DO NOTHING）。与向量同库，保证向量引用的原文一定可取到。
  * best-effort：写失败只 warn，读失败返回空。
  */
@@ -29,9 +29,10 @@ public class PgEpisodeStore implements EpisodeStore {
     public void append(Episode episode) {
         try {
             jdbc.update("""
-                    INSERT INTO episodes(id, ts, role, text) VALUES (?, ?, ?, ?)
+                    INSERT INTO messages(id, session_id, ts, role, text) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT (id) DO NOTHING
-                    """, episode.id(), episode.timestamp(), episode.role(), episode.text());
+                    """, episode.id(), episode.sessionId(), episode.timestamp(),
+                    episode.role(), episode.text());
         } catch (Exception e) {
             log.warn("会话消息落库失败（不影响主流程）：{}", e.getMessage());
         }
@@ -40,11 +41,11 @@ public class PgEpisodeStore implements EpisodeStore {
     @Override
     public List<Episode> listAll() {
         try {
-            return jdbc.query("SELECT id, ts, role, text FROM episodes ORDER BY ts",
-                    (rs, rowNum) -> new Episode(rs.getString("id"), rs.getLong("ts"),
-                            rs.getString("role"), rs.getString("text")));
+            return jdbc.query("SELECT id, session_id, ts, role, text FROM messages ORDER BY ts",
+                    (rs, rowNum) -> new Episode(rs.getString("id"), rs.getString("session_id"),
+                            rs.getLong("ts"), rs.getString("role"), rs.getString("text")));
         } catch (Exception e) {
-            log.warn("episodes 查询失败（fail-open，按空处理）：{}", e.getMessage());
+            log.warn("messages 查询失败（fail-open，按空处理）：{}", e.getMessage());
             return List.of();
         }
     }

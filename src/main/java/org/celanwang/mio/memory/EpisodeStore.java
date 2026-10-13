@@ -20,7 +20,8 @@ public interface EpisodeStore {
      * 一条会话消息原始记录。
      *
      * @param id 稳定指纹（见 {@link EpisodeRetriever#episodeId}），重启后由原文重算可对齐，PG 实现按它幂等
+     * @param sessionId 来源会话标识，可空；不参与 id 指纹计算
      */
-    record Episode(String id, long timestamp, String role, String text) {
+    record Episode(String id, String sessionId, long timestamp, String role, String text) {
     }
 }

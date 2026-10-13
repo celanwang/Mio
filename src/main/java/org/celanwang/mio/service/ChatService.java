@@ -170,7 +170,7 @@ public class ChatService {
         return agent.call(List.of(message), context).flatMap(reply -> {
             String effectiveModel = traceRouting(sessionId, context);
             traceNewMessages(sessionId, context, before, effectiveModel);
-            recordLongTermMemory(context);
+            recordLongTermMemory(context, sessionId);
             habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null
@@ -213,10 +213,10 @@ public class ChatService {
      * 手动回调长期记忆 record：AgentScope 2.0.4 的 STATIC_CONTROL record 回调绑定默认会话，
      * 本项目按请求自定义 sessionId，框架回调拿不到消息，故在此用当前会话上下文手动触发（异步、fail-open）。
      */
-    private void recordLongTermMemory(RuntimeContext context) {
+    private void recordLongTermMemory(RuntimeContext context, String sessionId) {
         AgentState state = agent.getAgentState(context);
         if (state != null) {
-            longTermMemory.record(state.getContext()).subscribe();
+            longTermMemory.record(state.getContext(), sessionId).subscribe();
         }
     }
 

@@ -33,7 +33,7 @@
 
 ## 数据库与部署
 
-- **表结构定稿**:[docs/db/schema.sql](docs/db/schema.sql)——7 张表 `events` / `messages` / `embeddings` / `entities` / `profiles` / `trusts` / `automations`，设计规则（表名单词复数、主键统一 `id`、五种字段类型、派生态与真相源隔离、变更纪律）见文件头注释。当前代码实装的是改名前的 4 张（events / episodes / episode_vectors / entities），改名与三张新表随记忆层改造落地。
+- **表结构定稿**:[docs/db/schema.sql](docs/db/schema.sql)——7 张表 `events` / `messages` / `embeddings` / `entities` / `profiles` / `trusts` / `automations`，设计规则（表名单词复数、主键统一 `id`、五种字段类型、派生态与真相源隔离、变更纪律）见文件头注释。代码侧 PG 实现已对齐定稿表结构（启动时幂等自建全部 7 张）。
 - **基础设施**:[docs/deploy/docker-compose.yml](docs/deploy/docker-compose.yml)——PG + pgvector（长期记忆/唯一真相源）+ Redis（短期记忆，AOF everysec，`maxmemory 256mb` + `allkeys-lru`,key 全部可弃）。密码经该目录 `.env` 注入（`PG_PASSWORD` / `REDIS_PASSWORD`，勿提交）；安全组 5432/6379 必须配置可信 IP 白名单，禁止 `0.0.0.0/0`；应用与数据库同机部署时改绑 `127.0.0.1` 并关闭安全组端口。
 - **故障方向**:Redis 不可达回退进程内存（fail-open，重启丢会话）;PG 不可达时画像/回忆静默降级（fail-open)，信任/自动化倒向全部人工确认（fail-closed)。PG 是唯一真相源，`pg_dump` 定时备份挂在演进路线。
 
@@ -102,7 +102,7 @@ chmod 600 .env
 
 旧版扁平画像 `profile.json` 在首次启动时自动迁移为 Wiki 页，原文件改名 `profile.json.migrated` 保留可查。
 
-**可选的 PG 存储后端**：设置 `MIO_MEMORY_STORE=pg` 并配置 `MIO_PG_JDBC_URL` / `MIO_PG_USERNAME` / `MIO_PG_PASSWORD` 后，记录型数据（事件日志、episode 原文、episode 向量、实体三元组）改存 PostgreSQL + pgvector——episode 原文与向量同库（向量引用不会悬空），向量检索走 pgvector 余弦距离（`<=>`），embedding 模型 text-embedding-v4、向量列固定 `vector(1024)`，表结构启动时 `CREATE TABLE IF NOT EXISTS` 自建（events / episodes / episode_vectors / entities）。PG 不可达时记忆链路 fail-open（warn + 静默降级，不阻断对话）。画像 Wiki、信任规则、自动化规则是可重建的物化视图或配置型数据，始终留在本地文件，不随开关迁移。切换开关不回迁历史数据：pg 模式从空库开始记录。
+**可选的 PG 存储后端**：设置 `MIO_MEMORY_STORE=pg` 并配置 `MIO_PG_JDBC_URL` / `MIO_PG_USERNAME` / `MIO_PG_PASSWORD` 后，记录型数据（事件日志、episode 原文、episode 向量、实体三元组）改存 PostgreSQL + pgvector——episode 原文与向量同库（向量引用不会悬空），向量检索走 pgvector 余弦距离（`<=>`），embedding 模型 text-embedding-v4、向量列固定 `vector(1024)`，表结构启动时 `CREATE TABLE IF NOT EXISTS` 自建（events / messages / embeddings / entities）。PG 不可达时记忆链路 fail-open（warn + 静默降级，不阻断对话）。画像 Wiki、信任规则、自动化规则是可重建的物化视图或配置型数据，始终留在本地文件，不随开关迁移。切换开关不回迁历史数据：pg 模式从空库开始记录。
 
 - 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`（按 slug 操作整页）；实体簿只读观察：`GET /api/entities`。
 - 信任统计（`GET/DELETE /api/trust`）只记录人工对写操作的批准/拒绝次数，本轮**只观察、不做自动放行**（自动放行在后续阶段实现）。

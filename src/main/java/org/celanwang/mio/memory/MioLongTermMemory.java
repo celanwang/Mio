@@ -112,12 +112,21 @@ public class MioLongTermMemory implements LongTermMemory {
     /**
      * 框架在 Agent 调用后回调（STATIC_CONTROL + asyncRecord）。
      * 注意：AgentScope 2.0.4 的框架回调绑定默认会话，自定义 sessionId 下不会触发，
-     * 实际由 ChatService 在每轮调用后用当前会话上下文手动调用本方法；recentHashes 去重保证不重复写入。
+     * 实际由 ChatService 在每轮调用后用当前会话上下文手动调用 {@link #record(List, String)}；
+     * recentHashes 去重保证不重复写入。
      */
     @Override
     public Mono<Void> record(List<Msg> msgs) {
+        return record(msgs, null);
+    }
+
+    /**
+     * 带会话标识的记录入口：ChatService 手动调用时传入当前会话的 sessionId，
+     * 作为 episode 的 session_id 落库（可空，不参与 id 指纹计算）。
+     */
+    public Mono<Void> record(List<Msg> msgs, String sessionId) {
         return Mono.fromRunnable(() -> {
-                    String lastUserText = recordEpisodes(msgs);
+                    String lastUserText = recordEpisodes(msgs, sessionId);
                     distiller.distill(lastUserText);
                 })
                 .doOnError(e -> log.warn("长期记忆写入失败（fail-open）：{}", e.getMessage()))
@@ -126,7 +135,7 @@ public class MioLongTermMemory implements LongTermMemory {
     }
 
     /** 把未记录过的 user/assistant 文本消息追加到 episode 存储，返回最近一条用户消息文本。 */
-    private String recordEpisodes(List<Msg> msgs) {
+    private String recordEpisodes(List<Msg> msgs, String sessionId) {
         String lastUserText = null;
         for (Msg msg : msgs) {
             if (msg.getRole() != MsgRole.USER && msg.getRole() != MsgRole.ASSISTANT) {
@@ -139,17 +148,17 @@ public class MioLongTermMemory implements LongTermMemory {
             if (msg.getRole() == MsgRole.USER) {
                 lastUserText = text;
             }
-            appendEpisode(msg.getRole(), text);
+            appendEpisode(msg.getRole(), text, sessionId);
         }
         return lastUserText;
     }
 
-    private void appendEpisode(MsgRole role, String text) {
+    private void appendEpisode(MsgRole role, String text, String sessionId) {
         try {
             long timestamp = System.currentTimeMillis();
             String roleName = role == MsgRole.USER ? "user" : "assistant";
             String id = EpisodeRetriever.episodeId(roleName, timestamp, text);
-            episodeStore.append(new EpisodeStore.Episode(id, timestamp, roleName, text));
+            episodeStore.append(new EpisodeStore.Episode(id, sessionId, timestamp, roleName, text));
             episodeRetriever.indexAsync(id, roleName, timestamp, text);
         } catch (Exception e) {
             log.warn("会话消息落盘失败（不影响主流程）：{}", e.getMessage());
