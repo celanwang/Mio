@@ -9,14 +9,14 @@
 1. **事件流是唯一真相源**：对话、工具调用、审核判定、人工批准全部进 append-only 事件日志；画像、信任、自动化规则都是事件流上可重建的蒸馏视图，系统永远可以重算。
 2. **每层有明确的失败方向**：画像损坏 fail-open（降级为不贴心，不阻断对话）；信任与自动化规则损坏 fail-closed（倒向更多人工确认，永不倒向更多放行）。
 3. **学习产生候选，授权来自用户**：系统可以提炼偏好、统计习惯、提出自动化建议，但任何放行权都由用户显式授予；记忆注入一律标注为参考信息而非指令。
-4. **本地优先，接缝留给未来**：单用户数据全部落盘本地 JSON/JSONL（人类可读、可审计、可手改），不引入数据库；在事件发布、异步任务、存储后端等关键位置预留接口，向量检索、MQ、云服务按真实触发信号逐个接入，不提前建设。
+4. **本地优先，接缝留给未来**：单用户数据默认落盘本地 JSON/JSONL（人类可读、可审计、可手改）；在事件发布、异步任务、存储后端等关键位置预留接口，向量检索、MQ、云服务按真实触发信号逐个接入，不提前建设。记录型数据（事件日志/episode/向量/实体）已可按配置切换为 PostgreSQL + pgvector（见「用户画像与记忆」一节），本地模式永远可用。
 
 ## 架构总览
 
 ```
 蒸馏层    用户画像（可重建的物化视图）   信任规则（策略）      自动化规则（授权）
              ↑ 提炼                        ↑ 统计晋升            ↑ 习惯检测
-记忆层    长期：episodes.jsonl + events-*.jsonl（append-only，按月滚动）
+记忆层    长期：episodes.jsonl + events-*.jsonl（append-only，按月滚动；可切换 PostgreSQL + pgvector）
              ↑ 巩固
           短期：会话内上下文（内存）
 事件源    对话消息 / 工具调用 / Jev 判定 / 人工批准·拒绝
@@ -68,6 +68,8 @@ chmod 600 .env
 | `DASHSCOPE_EMBEDDING_MODEL` | 可选，向量化模型名（默认 `text-embedding-v4`），episode 情景回忆检索用。 |
 | `MIO_RAG_ENABLED` | 可选，默认 `true`，设为 `false` 关闭情景回忆检索；embedding 不可用时自动静默降级，不影响对话。 |
 | `MIO_RAG_TOP_K` / `MIO_RAG_MIN_SCORE` | 可选，单次召回条数上限（默认 `3`）与余弦相似度阈值（默认 `0.6`，低于阈值不注入）。 |
+| `MIO_MEMORY_STORE` | 可选，记录型数据（事件日志/episode 原文/向量/实体三元组）存储后端：`local`（默认，本地 JSONL）或 `pg`（PostgreSQL + pgvector）。画像 Wiki/信任/自动化规则始终是本地文件，不受此开关影响。 |
+| `MIO_PG_JDBC_URL` / `MIO_PG_USERNAME` / `MIO_PG_PASSWORD` | `MIO_MEMORY_STORE=pg` 时必填，PostgreSQL 连接信息（库需启用 vector 扩展；表结构启动时自建）。 |
 
 ## 用户画像与记忆
 
@@ -87,6 +89,8 @@ chmod 600 .env
 ```
 
 旧版扁平画像 `profile.json` 在首次启动时自动迁移为 Wiki 页，原文件改名 `profile.json.migrated` 保留可查。
+
+**可选的 PG 存储后端**：设置 `MIO_MEMORY_STORE=pg` 并配置 `MIO_PG_JDBC_URL` / `MIO_PG_USERNAME` / `MIO_PG_PASSWORD` 后，记录型数据（事件日志、episode 原文、episode 向量、实体三元组）改存 PostgreSQL + pgvector——episode 原文与向量同库（向量引用不会悬空），向量检索走 pgvector 余弦距离（`<=>`），embedding 模型 text-embedding-v4、向量列固定 `vector(1024)`，表结构启动时 `CREATE TABLE IF NOT EXISTS` 自建（events / episodes / episode_vectors / entities）。PG 不可达时记忆链路 fail-open（warn + 静默降级，不阻断对话）。画像 Wiki、信任规则、自动化规则是可重建的物化视图或配置型数据，始终留在本地文件，不随开关迁移。切换开关不回迁历史数据：pg 模式从空库开始记录。
 
 - 画像在面板（`/panel.html` 的「画像」视图）中可见、可删除，也可通过 API 管理：`GET/PUT/DELETE /api/profile`（按 slug 操作整页）；实体簿只读观察：`GET /api/entities`。
 - 信任统计（`GET/DELETE /api/trust`）只记录人工对写操作的批准/拒绝次数，本轮**只观察、不做自动放行**（自动放行在后续阶段实现）。
@@ -116,7 +120,7 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 | 2 | 画像 Wiki 化：扁平 KV → 按作用域组织的主题页（参考 Karpathy LLM Wiki 模式），提炼器升级为整页改写，顺手产出实体三元组 | ✅ 已完成 |
 | 3 | episodes 向量检索 Lv0（DashScope embedding + 本地内存余弦，服务情景回忆与意图消歧） | ✅ 已完成 |
 | 4 | 意图识别消费记忆：域先验 + 消歧检索（实体簿接入消费方） | 未开始 |
-| 5+ | 云端中间件（托管向量库 / Redis / MQ / 图库）：均留有接缝与量化触发条件，信号出现才接入，本地模式永远可用 | 按信号触发 |
+| 5+ | 云端中间件：PostgreSQL + pgvector 记录型存储已落地（`MIO_MEMORY_STORE=pg`）；托管向量库 / Redis / MQ / 图库留有接缝与量化触发条件，信号出现才接入，本地模式永远可用 | 部分完成 |
 
 ## 试用示例（首个场景：麦当劳点餐）
 
