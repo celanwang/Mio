@@ -1,0 +1,89 @@
+-- Mio 数据库 Schema 定稿(PostgreSQL 16 + pgvector)
+--
+-- 定位:PG 是长期记忆的唯一真相源;本地不落任何记忆数据文件。
+-- 设计规则:
+--   1. 表名统一单词复数,说业务不说隐喻;
+--   2. 主键统一 id(TEXT 业务指纹 / BIGSERIAL 纯序号);
+--   3. 字段类型只用 TEXT / BIGINT(毫秒时间戳)/ INTEGER / DOUBLE PRECISION / TEXT[];
+--   4. 不留"也许有用"的字段,每列当下有消费者或有明确排期;
+--   5. 无外键,一致性由应用层保证;全部 CREATE TABLE IF NOT EXISTS 幂等自建(见 PgMemoryConfig)。
+--
+-- 部署初期允许 DROP 重建,不写迁移脚本;进入积累期后变更走 ALTER。
+
+-- 1. 事件日志:唯一真相源,append-only,只许追加字段不许改名(为重放/MQ 留地基)
+CREATE TABLE IF NOT EXISTS events (
+    id         TEXT PRIMARY KEY,
+    ts         BIGINT NOT NULL,
+    session_id TEXT,
+    node       TEXT,
+    type       TEXT,
+    title      TEXT,
+    detail     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts);
+
+-- 2. 对话消息:user/assistant 原文,长期记忆的原始素材
+CREATE TABLE IF NOT EXISTS messages (
+    id         TEXT PRIMARY KEY,           -- role+ts+text 的短 SHA-256 稳定指纹
+    session_id TEXT,
+    ts         BIGINT NOT NULL,
+    role       TEXT NOT NULL,              -- user / assistant
+    text       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+
+-- 3. 消息向量:派生态,与真相源物理隔离,可随时 TRUNCATE 后异步重建
+CREATE TABLE IF NOT EXISTS embeddings (
+    id        TEXT PRIMARY KEY,            -- 与 messages.id 同值
+    embedding vector(1024) NOT NULL        -- DashScope text-embedding-v4,维度 1024
+);
+
+-- 4. 实体三元组:双时态,KG 的 Lv0 形态,为意图消歧打底
+CREATE TABLE IF NOT EXISTS entities (
+    id         BIGSERIAL PRIMARY KEY,
+    subject    TEXT NOT NULL,
+    predicate  TEXT NOT NULL,
+    object     TEXT NOT NULL,
+    valid_from BIGINT NOT NULL,
+    valid_to   BIGINT,
+    source_ts  BIGINT NOT NULL
+);
+
+-- 5. 画像页:蒸馏视图,content 即 Markdown 逻辑文档(Memory as File 的 PG 表达)
+CREATE TABLE IF NOT EXISTS profiles (
+    id              TEXT PRIMARY KEY,      -- 页面标识(原 slug),创建后不变
+    scope           TEXT NOT NULL,         -- global / mcd-ordering / tencent-ride / weibo-assistant
+    title           TEXT NOT NULL,
+    source          TEXT NOT NULL,         -- explicit(手动)/ inferred(提炼器)
+    confidence      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    content         TEXT NOT NULL,         -- Markdown 正文
+    source_messages TEXT[],                -- 溯源:证据消息 id 列表(排期:蒸馏器改造时消费)
+    created_at      BIGINT,
+    updated_at      BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope);
+
+-- 6. 信任统计:只观察统计,不做自动放行;fail-closed,数据只进 PG
+CREATE TABLE IF NOT EXISTS trusts (
+    tool_name        TEXT NOT NULL,
+    param_signature  TEXT NOT NULL,        -- 参数骨架:create-order[addressId,items]
+    approvals        INTEGER NOT NULL DEFAULT 0,
+    rejections       INTEGER NOT NULL DEFAULT 0,
+    last_decision_at BIGINT NOT NULL,
+    PRIMARY KEY (tool_name, param_signature)   -- 业务唯一键,UPSERT 累加计数
+);
+
+-- 7. 自动化规则:状态机 PROPOSED → ACTIVE / REJECTED,必须用户显式批准才生效
+CREATE TABLE IF NOT EXISTS automations (
+    id           TEXT PRIMARY KEY,
+    title        TEXT NOT NULL,
+    tool_name    TEXT NOT NULL,
+    trigger_kind TEXT NOT NULL,            -- 现仅 session-start;避开保留字 TRIGGER
+    status       TEXT NOT NULL DEFAULT 'PROPOSED'
+                 CHECK (status IN ('PROPOSED', 'ACTIVE', 'REJECTED')),
+    reason       TEXT NOT NULL,            -- 提议依据说明
+    created_at   BIGINT NOT NULL,
+    decided_at   BIGINT                    -- PROPOSED 时为 NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_status ON automations(status);

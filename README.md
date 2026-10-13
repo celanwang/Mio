@@ -31,6 +31,11 @@
 
 - JDK 17
 
+## 文档
+
+- [docs/db](docs/db/)：数据库表结构设计（7 张表定稿 DDL 与设计规则）
+- [docs/deploy](docs/deploy/)：记忆层基础设施部署（PG + Redis,docker compose）
+
 ## 启动
 
 密钥通过 `.env` 注入（`.env` 已被 `.gitignore` 排除）：
