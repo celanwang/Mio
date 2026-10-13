@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -17,10 +18,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * {@link EntityStore} 的本地实现：三元组追加写 .mio/entities.jsonl，
+ * {@link EntityStore} 的本地实现（默认）：三元组追加写 .mio/entities.jsonl，
  * 内存按 subject 建索引。best-effort：写失败只 warn，读损坏单行跳过。
  */
 @Component
+@ConditionalOnProperty(name = "app.memory.store", havingValue = "local", matchIfMissing = true)
 public class LocalEntityStore implements EntityStore {
 
     private static final Logger log = LoggerFactory.getLogger(LocalEntityStore.class);

@@ -1,6 +1,5 @@
 package org.celanwang.mio.memory;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,9 +8,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.io.BufferedReader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -41,33 +37,30 @@ public class EpisodeRetriever implements ApplicationRunner {
     private static final long BACKFILL_THROTTLE_MILLIS = 200;
     private static final int RECALL_TEXT_MAX = 100;
 
-    private final Path episodesFile;
-    private final ObjectMapper objectMapper;
+    private final EpisodeStore episodeStore;
     private final VectorStore vectorStore;
     private final EmbeddingClient embeddingClient;
     private final MemoryTaskExecutor taskExecutor;
     private final boolean enabled;
     private final int topK;
     private final double minScore;
-    /** id → 原文元数据（检索命中后回表，不回读文件）。 */
+    /** id → 原文元数据（检索命中后回表，不回读存储）。 */
     private final Map<String, Meta> metaById = new ConcurrentHashMap<>();
 
-    public EpisodeRetriever(@Value("${app.memory.dir:./.mio}") String dir,
-                            @Value("${app.memory.rag.enabled:true}") boolean enabled,
+    public EpisodeRetriever(@Value("${app.memory.rag.enabled:true}") boolean enabled,
                             @Value("${app.memory.rag.top-k:3}") int topK,
                             @Value("${app.memory.rag.min-score:0.6}") double minScore,
+                            EpisodeStore episodeStore,
                             VectorStore vectorStore,
                             EmbeddingClient embeddingClient,
-                            MemoryTaskExecutor taskExecutor,
-                            ObjectMapper objectMapper) {
-        this.episodesFile = JsonFileSupport.expandHome(dir).resolve("memory/episodes.jsonl");
+                            MemoryTaskExecutor taskExecutor) {
         this.enabled = enabled;
         this.topK = topK;
         this.minScore = minScore;
+        this.episodeStore = episodeStore;
         this.vectorStore = vectorStore;
         this.embeddingClient = embeddingClient;
         this.taskExecutor = taskExecutor;
-        this.objectMapper = objectMapper;
     }
 
     /** episode 稳定指纹：role + 时间戳 + 原文的短 SHA-256，重启后由原文重算可对齐。 */
@@ -131,7 +124,7 @@ public class EpisodeRetriever implements ApplicationRunner {
     /** 启动回填：为历史 episodes 中缺向量的行异步补索引（限量、限流、fail-open）。 */
     @Override
     public void run(ApplicationArguments args) {
-        if (!enabled || !Files.exists(episodesFile)) {
+        if (!enabled) {
             return;
         }
         taskExecutor.execute(() -> {
@@ -145,23 +138,14 @@ public class EpisodeRetriever implements ApplicationRunner {
 
     private void backfill() throws Exception {
         List<Pending> pending = new ArrayList<>();
-        try (BufferedReader reader = Files.newBufferedReader(episodesFile)) {
-            String line;
-            while ((line = reader.readLine()) != null && pending.size() < BACKFILL_MAX) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                try {
-                    MioLongTermMemory.Episode episode =
-                            objectMapper.readValue(line, MioLongTermMemory.Episode.class);
-                    String id = episodeId(episode.role(), episode.timestamp(), episode.text());
-                    metaById.putIfAbsent(id, new Meta(episode.role(), episode.timestamp(), episode.text()));
-                    if (!vectorStore.contains(id)) {
-                        pending.add(new Pending(id, episode.text()));
-                    }
-                } catch (Exception e) {
-                    // 单行损坏跳过
-                }
+        for (EpisodeStore.Episode episode : episodeStore.listAll()) {
+            if (pending.size() >= BACKFILL_MAX) {
+                break;
+            }
+            metaById.putIfAbsent(episode.id(),
+                    new Meta(episode.role(), episode.timestamp(), episode.text()));
+            if (!vectorStore.contains(episode.id())) {
+                pending.add(new Pending(episode.id(), episode.text()));
             }
         }
         if (pending.isEmpty()) {

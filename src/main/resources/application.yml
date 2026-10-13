@@ -49,6 +49,14 @@ app:
     skills-dir: ${MIO_SKILLS_DIR:./skills}
 
   memory:
+    # 记录型数据（事件日志/episode 原文/向量/实体三元组）存储后端：local（默认，本地 JSONL）
+    # 或 pg（PostgreSQL + pgvector）；画像/信任/自动化始终为本地文件，不受该开关影响。
+    store: ${MIO_MEMORY_STORE:local}
+    pg:
+      # pg 模式的连接信息（在 .env 或运行配置中设置 MIO_PG_JDBC_URL / MIO_PG_USERNAME / MIO_PG_PASSWORD）。
+      url: ${MIO_PG_JDBC_URL:}
+      username: ${MIO_PG_USERNAME:}
+      password: ${MIO_PG_PASSWORD:}
     # 用户画像与记忆数据目录（画像/信任/事件日志），默认项目根目录下 .mio（已 gitignore）。
     dir: ${MIO_DATA_DIR:./.mio}
     distiller:

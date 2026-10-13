@@ -1,19 +1,14 @@
 package org.celanwang.mio.memory;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.memory.LongTermMemory;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Mono;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -34,25 +29,22 @@ public class MioLongTermMemory implements LongTermMemory {
     private final ProfileInjector profileInjector;
     private final EpisodeRetriever episodeRetriever;
     private final EmbeddingClient embeddingClient;
-    private final Path episodesFile;
-    private final ObjectMapper objectMapper;
+    private final EpisodeStore episodeStore;
     /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
     private final Set<String> recentHashes = new LinkedHashSet<>();
 
-    public MioLongTermMemory(@Value("${app.memory.dir:./.mio}") String dir,
-                             ProfileDistiller distiller,
+    public MioLongTermMemory(ProfileDistiller distiller,
                              AutomationStore automationStore,
                              ProfileInjector profileInjector,
                              EpisodeRetriever episodeRetriever,
                              EmbeddingClient embeddingClient,
-                             ObjectMapper objectMapper) {
-        this.episodesFile = JsonFileSupport.expandHome(dir).resolve("memory/episodes.jsonl");
+                             EpisodeStore episodeStore) {
         this.distiller = distiller;
         this.automationStore = automationStore;
         this.profileInjector = profileInjector;
         this.episodeRetriever = episodeRetriever;
         this.embeddingClient = embeddingClient;
-        this.objectMapper = objectMapper;
+        this.episodeStore = episodeStore;
     }
 
     /**
@@ -133,7 +125,7 @@ public class MioLongTermMemory implements LongTermMemory {
                 .then();
     }
 
-    /** 把未记录过的 user/assistant 文本消息追加到 episodes.jsonl，返回最近一条用户消息文本。 */
+    /** 把未记录过的 user/assistant 文本消息追加到 episode 存储，返回最近一条用户消息文本。 */
     private String recordEpisodes(List<Msg> msgs) {
         String lastUserText = null;
         for (Msg msg : msgs) {
@@ -154,14 +146,11 @@ public class MioLongTermMemory implements LongTermMemory {
 
     private void appendEpisode(MsgRole role, String text) {
         try {
-            Files.createDirectories(episodesFile.getParent());
             long timestamp = System.currentTimeMillis();
             String roleName = role == MsgRole.USER ? "user" : "assistant";
-            String line = objectMapper.writeValueAsString(new Episode(timestamp, roleName, text));
-            Files.writeString(episodesFile, line + "\n",
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            episodeRetriever.indexAsync(
-                    EpisodeRetriever.episodeId(roleName, timestamp, text), roleName, timestamp, text);
+            String id = EpisodeRetriever.episodeId(roleName, timestamp, text);
+            episodeStore.append(new EpisodeStore.Episode(id, timestamp, roleName, text));
+            episodeRetriever.indexAsync(id, roleName, timestamp, text);
         } catch (Exception e) {
             log.warn("会话消息落盘失败（不影响主流程）：{}", e.getMessage());
         }
@@ -172,9 +161,5 @@ public class MioLongTermMemory implements LongTermMemory {
             recentHashes.remove(recentHashes.iterator().next());
         }
         return recentHashes.add(hash);
-    }
-
-    /** episodes.jsonl 的单行结构。 */
-    public record Episode(long timestamp, String role, String text) {
     }
 }

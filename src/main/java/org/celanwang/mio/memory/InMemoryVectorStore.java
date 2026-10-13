@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -17,11 +18,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@link VectorStore} 的 Lv0 实现：向量持久化在 memory/episodes-vectors.jsonl，
+ * {@link VectorStore} 的 Lv0 实现（默认）：向量持久化在 memory/episodes-vectors.jsonl，
  * 启动时流式读入内存，检索为暴力余弦（万级规模 <10ms）。
  * 容量护栏：超过 {@link #CAPACITY_WARN_AT} 条时 warn 提示升级 Lucene HNSW。
  */
 @Component
+@ConditionalOnProperty(name = "app.memory.store", havingValue = "local", matchIfMissing = true)
 public class InMemoryVectorStore implements VectorStore {
 
     private static final Logger log = LoggerFactory.getLogger(InMemoryVectorStore.class);

@@ -5,6 +5,7 @@ import org.celanwang.mio.trace.TraceEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -17,9 +18,10 @@ import java.util.UUID;
 
 /**
  * 事件日志（memory/events-YYYY-MM.jsonl）：执行链路事件的 append-only 持久化，按月滚动。
- * {@link EventPublisher} 的本地实现；best-effort：写失败只 warn，绝不阻断主流程。
+ * {@link EventPublisher} 的本地实现（默认）；best-effort：写失败只 warn，绝不阻断主流程。
  */
 @Component
+@ConditionalOnProperty(name = "app.memory.store", havingValue = "local", matchIfMissing = true)
 public class EventLogStore implements EventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(EventLogStore.class);
