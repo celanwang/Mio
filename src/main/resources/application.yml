@@ -57,6 +57,12 @@ app:
       url: ${MIO_PG_JDBC_URL:}
       username: ${MIO_PG_USERNAME:}
       password: ${MIO_PG_PASSWORD:}
+    redis:
+      # 短期记忆（会话上下文/去重/缓存）连接信息；host 留空时回退进程内存，fail-open。
+      # 预留配置项，代码侧接入后生效。
+      host: ${MIO_REDIS_HOST:}
+      port: ${MIO_REDIS_PORT:6379}
+      password: ${MIO_REDIS_PASSWORD:}
     # 用户画像与记忆数据目录（画像/信任/事件日志），默认项目根目录下 .mio（已 gitignore）。
     dir: ${MIO_DATA_DIR:./.mio}
     distiller:
