@@ -43,7 +43,8 @@ app:
       host: ${DASHSCOPE_PROXY_HOST:}
       port: ${DASHSCOPE_PROXY_PORT:7890}
     api-key: ${DASHSCOPE_API_KEY:}
-    model-name: qwen3-max
+    # 主模型：可用 DASHSCOPE_MODEL 覆盖（账号需有对应模型权限，否则 DashScope 返回 404 model_not_found）。
+    model-name: ${DASHSCOPE_MODEL:qwen3-max}
     # 轻量模型：配置 Jev 后由 Jev 按请求复杂度路由，简单请求走该模型。
     fast-model-name: ${DASHSCOPE_FAST_MODEL:qwen-flash}
     # 向量化模型：episode 情景回忆检索用（历史消息 embedding）。
