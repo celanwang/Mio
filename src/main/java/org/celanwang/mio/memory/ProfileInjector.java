@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
- * 画像注入器：按当前用户消息的相关性过滤画像 Wiki 页后渲染注入文本。三级判定：
+ * 画像注入器：按当前用户消息的相关性过滤画像页后渲染注入文本。三级判定：
  * 1. 规则（确定性，零成本）：global 页全量保留；domain 页命中领域别名或词面重叠即保留；
  * 2. 向量召回：规则未命中的 domain 页与消息做余弦相似度，不低于阈值即保留
  *    （页面向量异步懒建索引、仅存内存，embedding 不可用时静默降级）；
@@ -51,7 +51,7 @@ public class ProfileInjector {
     private static final int JUDGE_TIMEOUT_SECONDS = 3;
     private static final int JUDGE_CACHE_MAX = 200;
 
-    private final WikiStore wikiStore;
+    private final ProfileStore profileStore;
     private final DomainAliasRegistry aliasRegistry;
     private final EventPublisher eventPublisher;
     private final Model fastModel;
@@ -76,7 +76,7 @@ public class ProfileInjector {
     /** 已索引页面的内容指纹（slug → hash），内容变更时触发重 embed。 */
     private final Map<String, String> pageVectorHashes = new ConcurrentHashMap<>();
 
-    public ProfileInjector(WikiStore wikiStore,
+    public ProfileInjector(ProfileStore profileStore,
                            DomainAliasRegistry aliasRegistry,
                            EventPublisher eventPublisher,
                            @Qualifier("dashScopeFastModel") Model fastModel,
@@ -88,7 +88,7 @@ public class ProfileInjector {
                            @Value("${app.memory.inject.vector-enabled:true}") boolean vectorEnabled,
                            @Value("${app.memory.inject.vector-min-score:0.35}") double vectorMinScore,
                            @Value("${app.memory.inject.max-entries:30}") int maxEntries) {
-        this.wikiStore = wikiStore;
+        this.profileStore = profileStore;
         this.aliasRegistry = aliasRegistry;
         this.eventPublisher = eventPublisher;
         this.fastModel = fastModel;
@@ -104,26 +104,26 @@ public class ProfileInjector {
 
     /** 渲染注入文本；currentUserText 为当前用户消息（空则全量注入），queryVector 为注入链路的共享查询向量。 */
     public String render(String currentUserText, Supplier<float[]> queryVector) {
-        List<WikiPage> all = wikiStore.pages();
+        List<ProfilePage> all = profileStore.pages();
         if (all.isEmpty()) {
             return "";
         }
         if (!filterEnabled || !StringUtils.hasText(currentUserText)) {
-            return wikiStore.render(all);
+            return profileStore.render(all);
         }
-        List<WikiPage> selected = new ArrayList<>();
+        List<ProfilePage> selected = new ArrayList<>();
         Map<String, String> reasonBySlug = new LinkedHashMap<>();
-        List<WikiPage> undecided = new ArrayList<>();
-        for (WikiPage page : all) {
-            if (WikiStore.SCOPE_GLOBAL.equals(page.scope())) {
+        List<ProfilePage> undecided = new ArrayList<>();
+        for (ProfilePage page : all) {
+            if (ProfileStore.SCOPE_GLOBAL.equals(page.scope())) {
                 selected.add(page);
-                reasonBySlug.put(page.slug(), "global");
+                reasonBySlug.put(page.id(), "global");
                 continue;
             }
             String hit = ruleHit(page, currentUserText);
             if (hit != null) {
                 selected.add(page);
-                reasonBySlug.put(page.slug(), hit);
+                reasonBySlug.put(page.id(), hit);
             } else {
                 undecided.add(page);
             }
@@ -133,14 +133,14 @@ public class ProfileInjector {
             float[] sharedVector = queryVector.get();
             if (sharedVector != null) {
                 undecided.removeIf(page -> {
-                    float[] vector = pageVectors.get(page.slug());
+                    float[] vector = pageVectors.get(page.id());
                     if (vector == null) {
                         return false;
                     }
                     double score = cosine(sharedVector, vector);
                     if (score >= vectorMinScore) {
                         selected.add(page);
-                        reasonBySlug.put(page.slug(),
+                        reasonBySlug.put(page.id(),
                                 "vector " + String.format("%.2f", score));
                         return true;
                     }
@@ -153,15 +153,15 @@ public class ProfileInjector {
             judged = undecided.size();
             Set<String> hits = judgeWithModel(currentUserText, undecided);
             undecided.removeIf(page -> {
-                if (hits.contains(page.slug())) {
+                if (hits.contains(page.id())) {
                     selected.add(page);
-                    reasonBySlug.put(page.slug(), "llm");
+                    reasonBySlug.put(page.id(), "llm");
                     return true;
                 }
                 return false;
             });
         }
-        List<WikiPage> finalSelection = selected.stream()
+        List<ProfilePage> finalSelection = selected.stream()
                 .sorted((a, b) -> {
                     int byConfidence = Double.compare(b.confidence(), a.confidence());
                     return byConfidence != 0 ? byConfidence
@@ -170,18 +170,18 @@ public class ProfileInjector {
                 .limit(Math.max(maxEntries, 1))
                 .toList();
         publishDecision(currentUserText, all.size(), finalSelection, reasonBySlug, judged);
-        return wikiStore.render(finalSelection);
+        return profileStore.render(finalSelection);
     }
 
     /**
      * 页面向量懒索引：内容指纹变化的页异步 embed 入内存索引。
      * 索引未就绪期间向量级静默落空（规则与模型复核仍生效）；embed 失败不记指纹，下次 render 重试。
      */
-    private void indexPagesAsync(List<WikiPage> pages) {
-        List<WikiPage> stale = new ArrayList<>();
-        for (WikiPage page : pages) {
+    private void indexPagesAsync(List<ProfilePage> pages) {
+        List<ProfilePage> stale = new ArrayList<>();
+        for (ProfilePage page : pages) {
             if (!String.valueOf(embeddingText(page).hashCode())
-                    .equals(pageVectorHashes.get(page.slug()))) {
+                    .equals(pageVectorHashes.get(page.id()))) {
                 stale.add(page);
             }
         }
@@ -197,8 +197,8 @@ public class ProfileInjector {
                 }
                 List<float[]> vectors = embedded.get();
                 for (int i = 0; i < stale.size(); i++) {
-                    pageVectors.put(stale.get(i).slug(), vectors.get(i));
-                    pageVectorHashes.put(stale.get(i).slug(), String.valueOf(texts.get(i).hashCode()));
+                    pageVectors.put(stale.get(i).id(), vectors.get(i));
+                    pageVectorHashes.put(stale.get(i).id(), String.valueOf(texts.get(i).hashCode()));
                 }
             } catch (Exception e) {
                 log.warn("画像页向量索引失败（fail-open）：{}", e.getMessage());
@@ -206,7 +206,7 @@ public class ProfileInjector {
         });
     }
 
-    private String embeddingText(WikiPage page) {
+    private String embeddingText(ProfilePage page) {
         return page.title() + "\n" + page.content().trim();
     }
 
@@ -224,15 +224,15 @@ public class ProfileInjector {
     }
 
     /** 过滤决策留痕：写入事件日志（不经 TraceStore，注入无会话归属，不占用面板会话列表）。 */
-    private void publishDecision(String message, int candidates, List<WikiPage> injected,
+    private void publishDecision(String message, int candidates, List<ProfilePage> injected,
                                  Map<String, String> reasonBySlug, int judged) {
         try {
             StringBuilder hits = new StringBuilder();
-            for (WikiPage page : injected) {
+            for (ProfilePage page : injected) {
                 if (!hits.isEmpty()) {
                     hits.append(", ");
                 }
-                hits.append(page.slug()).append('=').append(reasonBySlug.get(page.slug()));
+                hits.append(page.id()).append('=').append(reasonBySlug.get(page.id()));
             }
             eventPublisher.publish("memory", new TraceEvent(System.currentTimeMillis(),
                     "memory:inject", "inject_decision",
@@ -247,15 +247,15 @@ public class ProfileInjector {
      * 轻量模型复核：规则未命中的 domain 页批量判定相关性。
      * 超时/异常/输出非法一律返回空集（倒向不注入）；只接受候选页内的 slug，防模型编造。
      */
-    private Set<String> judgeWithModel(String message, List<WikiPage> undecided) {
+    private Set<String> judgeWithModel(String message, List<ProfilePage> undecided) {
         Set<String> cached = judgeCache.get(message);
         if (cached != null) {
             return cached;
         }
         try {
             StringBuilder pages = new StringBuilder();
-            for (WikiPage page : undecided) {
-                pages.append(page.slug()).append(" | ").append(page.title()).append(" | ")
+            for (ProfilePage page : undecided) {
+                pages.append(page.id()).append(" | ").append(page.title()).append(" | ")
                         .append(page.content().trim()).append('\n');
             }
             var responses = fastModel.stream(
@@ -277,8 +277,8 @@ public class ProfileInjector {
                 return Set.of();
             }
             Set<String> validSlugs = new HashSet<>();
-            for (WikiPage page : undecided) {
-                validSlugs.add(page.slug());
+            for (ProfilePage page : undecided) {
+                validSlugs.add(page.id());
             }
             Set<String> hits = new HashSet<>();
             for (JsonNode node : objectMapper.readTree(json).path("relevant")) {
@@ -303,7 +303,7 @@ public class ProfileInjector {
     }
 
     /** domain 页规则命中：领域别名命中返回 "alias"，词面重叠命中返回 "overlap"，未命中返回 null。 */
-    private String ruleHit(WikiPage page, String message) {
+    private String ruleHit(ProfilePage page, String message) {
         Set<String> aliases = aliasRegistry.aliasesOf(page.scope());
         if (message.contains(page.scope()) || aliases.stream().anyMatch(message::contains)) {
             return "alias";

@@ -289,7 +289,7 @@ async function renderProfile() {
         `<td title="${escapeHtml(content)}">${escapeHtml(preview)}</td>` +
         `<td><span class="src ${e.source}">${SOURCE_LABEL[e.source] || e.source}</span></td>` +
         `<td>${e.confidence.toFixed(2)}</td>` +
-        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.slug)}')">删除</button></td></tr>`;
+        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.id)}')">删除</button></td></tr>`;
     }
     html += '</table>';
   }
@@ -337,8 +337,8 @@ async function renderProfile() {
   box.innerHTML = html;
 }
 
-async function deleteProfile(slug) {
-  await fetch('/api/profile?slug=' + slug, { method: 'DELETE' });
+async function deleteProfile(id) {
+  await fetch('/api/profile?id=' + id, { method: 'DELETE' });
   renderProfile();
 }
 

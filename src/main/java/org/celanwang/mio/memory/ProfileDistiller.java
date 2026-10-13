@@ -16,7 +16,7 @@ import org.springframework.util.StringUtils;
 import java.util.List;
 
 /**
- * 画像提炼器：用轻量模型把用户显式表达的偏好维护进画像 Wiki（整页改写），
+ * 画像提炼器：用轻量模型把用户显式表达的偏好维护进用户画像（整页改写），
  * 并顺手产出实体关系三元组写入实体簿。
  * 只提取显式偏好，敏感主题不提取；任何解析/模型异常 fail-open 忽略，只记日志。
  */
@@ -41,20 +41,20 @@ public class ProfileDistiller {
             """;
 
     private final Model fastModel;
-    private final WikiStore wikiStore;
+    private final ProfileStore profileStore;
     private final EntityStore entityStore;
     private final ObjectMapper objectMapper;
     private final MemoryTaskExecutor taskExecutor;
     private final boolean enabled;
 
     public ProfileDistiller(@Qualifier("dashScopeFastModel") Model fastModel,
-                            WikiStore wikiStore,
+                            ProfileStore profileStore,
                             EntityStore entityStore,
                             ObjectMapper objectMapper,
                             MemoryTaskExecutor taskExecutor,
                             @Value("${app.memory.distiller.enabled:true}") boolean enabled) {
         this.fastModel = fastModel;
-        this.wikiStore = wikiStore;
+        this.profileStore = profileStore;
         this.entityStore = entityStore;
         this.objectMapper = objectMapper;
         this.taskExecutor = taskExecutor;
@@ -77,8 +77,8 @@ public class ProfileDistiller {
 
     private void doDistill(String userText) throws Exception {
         StringBuilder pages = new StringBuilder();
-        for (WikiPage page : wikiStore.pages()) {
-            pages.append(page.slug()).append(" | ").append(page.scope()).append(" | ")
+        for (ProfilePage page : profileStore.pages()) {
+            pages.append(page.id()).append(" | ").append(page.scope()).append(" | ")
                     .append(page.title()).append(" | ").append(page.content().trim()).append('\n');
         }
         String prompt = PROMPT + (pages.isEmpty() ? "（空）" : pages.toString())
@@ -116,12 +116,12 @@ public class ProfileDistiller {
                 continue;
             }
             String slug = StringUtils.hasText(op.slug()) ? op.slug().trim() : op.title().trim();
-            String scope = StringUtils.hasText(op.scope()) ? op.scope().trim() : WikiStore.SCOPE_GLOBAL;
+            String scope = StringUtils.hasText(op.scope()) ? op.scope().trim() : ProfileStore.SCOPE_GLOBAL;
             double confidence = op.confidence() == null ? 0.8
                     : Math.max(0.0, Math.min(1.0, op.confidence()));
-            wikiStore.savePage(new WikiPage(WikiStore.sanitize(slug), op.title().trim(), scope,
-                    WikiStore.SOURCE_INFERRED, confidence, now, op.content().trim()));
-            log.info("画像 Wiki 页新增/更新：{}（{}）", op.title(), scope);
+            profileStore.savePage(new ProfilePage(ProfileStore.sanitize(slug), op.title().trim(), scope,
+                    ProfileStore.SOURCE_INFERRED, confidence, now, op.content().trim()));
+            log.info("画像页新增/更新：{}（{}）", op.title(), scope);
         }
     }
 
