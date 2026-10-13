@@ -53,6 +53,17 @@ public class AgentConfig {
         return buildModel(apiKey, fastModelName.trim(), baseUrl, proxyHost, proxyPort);
     }
 
+    // 标准模型：点餐、打车、微博等工具流程任务的中间档位，供 Jev 路由中间件使用。
+    @Bean
+    public Model dashScopePlusModel(
+            @Value("${app.dashscope.api-key}") String apiKey,
+            @Value("${app.dashscope.plus-model-name:qwen-plus}") String plusModelName,
+            @Value("${app.dashscope.base-url:}") String baseUrl,
+            @Value("${app.dashscope.proxy.host:}") String proxyHost,
+            @Value("${app.dashscope.proxy.port:7890}") int proxyPort) {
+        return buildModel(apiKey, plusModelName.trim(), baseUrl, proxyHost, proxyPort);
+    }
+
     private Model buildModel(String apiKey, String modelName, String baseUrl,
                              String proxyHost, int proxyPort) {
         var transport = HttpTransportConfig.builder()
@@ -79,6 +90,7 @@ public class AgentConfig {
     public ReActAgent chatAgent(
             Model model,
             @Qualifier("dashScopeFastModel") Model fastModel,
+            @Qualifier("dashScopePlusModel") Model plusModel,
             MioLongTermMemory longTermMemory,
             Toolkit toolkit,
             AgentSkillRepository skillRepository,
@@ -143,11 +155,13 @@ public class AgentConfig {
                 .longTermMemoryMode(LongTermMemoryMode.STATIC_CONTROL)
                 .longTermMemoryAsyncRecord(true);
 
-        // Jev 可用时按请求复杂度路由模型：复杂任务用主模型，简单请求用轻量模型。
+        // Jev 可用时按请求复杂度路由模型：复杂/高要求任务用主模型，点餐、打车等工具流程用标准模型，
+        // 简单问答用轻量模型。
         JevClient jev = jevClient.getIfAvailable();
         if (jev != null && !modelName(fastModel).equals(modelName(model))) {
             builder.middleware(JevModelRouterMiddleware.builder(jev)
-                    .choice("complex", model, "需要多步规划、工具编排、点餐下单、计算或复杂推理的请求")
+                    .choice("advanced", model, "长任务、多步骤规划、高质量要求的内容创作或复杂推理")
+                    .choice("standard", plusModel, "麦当劳点餐、腾讯打车、微博等工具调用与业务流程操作，以及一般性任务")
                     .choice("simple", fastModel, "简单问答、闲聊或一步就能完成的查询")
                     .confidenceThreshold(0.7)
                     .failOpen(true)
