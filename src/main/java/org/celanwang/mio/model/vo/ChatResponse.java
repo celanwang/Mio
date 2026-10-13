@@ -15,4 +15,6 @@ public class ChatResponse {
 
     private List<ToolConfirmation> pendingConfirmations;
 
+    private WeiboAction weiboAction;
+
 }

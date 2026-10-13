@@ -1,5 +1,7 @@
 .env
 .mio/
+.weibo/
+.tencent-ride/
 target/
 .idea/
 *.iml

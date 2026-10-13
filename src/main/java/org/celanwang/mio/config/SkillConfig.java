@@ -13,6 +13,8 @@ import java.nio.file.Path;
 @Configuration
 public class SkillConfig {
     public static final String MCD_ORDERING_SKILL = "mcd-ordering";
+    public static final String WEIBO_ASSISTANT_SKILL = "weibo-assistant";
+    public static final String TENCENT_RIDE_SKILL = "tencent-ride";
     private static final Logger log = LoggerFactory.getLogger(SkillConfig.class);
 
     @Bean(destroyMethod = "close")
@@ -26,6 +28,14 @@ public class SkillConfig {
             if (!repository.skillExists(MCD_ORDERING_SKILL)) {
                 throw new IllegalStateException(
                         "缺少麦当劳点餐技能，请检查 " + skillsDir + "/mcd-ordering/SKILL.md。");
+            }
+            if (!repository.skillExists(WEIBO_ASSISTANT_SKILL)) {
+                throw new IllegalStateException(
+                        "缺少微博助手技能，请检查 " + skillsDir + "/weibo-assistant/SKILL.md。");
+            }
+            if (!repository.skillExists(TENCENT_RIDE_SKILL)) {
+                throw new IllegalStateException(
+                        "缺少腾讯打车技能，请检查 " + skillsDir + "/tencent-ride/SKILL.md。");
             }
             log.info("已从 {} 加载 Agent 技能：{}", skillsDir, repository.getAllSkillNames());
             return repository;

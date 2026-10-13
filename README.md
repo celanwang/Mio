@@ -2,7 +2,7 @@
 
 一个 **Personal Agent** 的探索与实践：不止于"会聊天"，而是能记住你、理解你的习惯、在你授权的边界内主动为你做事的个人智能体。
 
-基于 Java 17 + Spring Boot + AgentScope Java（DashScope 模型）。麦当劳点餐是第一个落地场景（通过 MCP 接入），用于验证记忆、权限、审核这条主链路；架构按多场景泛化设计，接入新业务 = 新增一个技能包，内核不变。
+基于 Java 17 + Spring Boot + AgentScope Java（DashScope 模型）。麦当劳点餐是第一个落地场景（通过 MCP 接入），用于验证记忆、权限、审核这条主链路；架构按多场景泛化设计，接入新业务 = 新增一个技能包，内核不变。目前已接入的渠道：麦当劳点餐（MCP）、微博（官方 MCP，OAuth 按需授权）、腾讯出行打车（本地 Python 桥接官方接口）。
 
 ## 设计原则
 
@@ -51,6 +51,9 @@ chmod 600 .env
 | `DASHSCOPE_API_KEY` | DashScope API key（必填，否则无法聊天）。 |
 | `MCD_MCP_ENABLED` | 是否连接麦当劳 MCP（首个场景），默认 `true`。设为 `false` 可跳过连接，只做普通聊天。 |
 | `MCD_MCP_TOKEN` | 麦当劳 MCP 令牌，在 [open.mcd.cn/mcp/doc](https://open.mcd.cn/mcp/doc) 控制台申请；填写有效 token 并把 `MCD_MCP_ENABLED` 设为 `true` 后才能点餐。 |
+| `WEIBO_MCP_ENABLED` | 是否启用微博官方 MCP，默认 `true`。微博无静态 token：首次微博任务时页面提供「授权微博」入口，OAuth 完成后凭证保存在本机 `.weibo/auth.json`（已 gitignore），授权管理接口仅允许本机访问。 |
+| `TENCENT_RIDE_ENABLED` / `TENCENT_RIDE_TOKEN` | 腾讯出行打车开关（默认 `true`）与令牌；token 获取方式见 `skills/tencent-ride` 技能的 quick-start 说明，只经 stdin 传给本地 Python 子进程，不入日志与工具 schema。 |
+| `TENCENT_RIDE_PYTHON` / `TENCENT_RIDE_CITY` | 可选，Python 解释器路径（默认 `python`）与常住城市（留空则打车时主动询问本次城市）。 |
 | `DASHSCOPE_BASE_URL` | 可选，切换 DashScope 地域地址。 |
 | `DASHSCOPE_PROXY_HOST` / `DASHSCOPE_PROXY_PORT` | 可选，模型服务代理，默认端口 7890。 |
 | `DASHSCOPE_FAST_MODEL` | 可选，轻量模型名（默认 `qwen-flash`）。配置 Jev 后由 Jev 按请求复杂度路由：复杂任务走 `qwen3-max`，简单请求走该模型。 |
@@ -108,7 +111,7 @@ chmod 600 .env
 
 ## 技能目录（领域知识包）
 
-Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-ordering/`），随仓库版本化，但通过文件系统加载——修改技能内容无需重新构建，重启应用即可生效。运行时代码只读使用该目录。启动时会强校验 `mcd-ordering` 技能存在，缺失则启动失败。
+Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-ordering/`、`skills/weibo-assistant/`、`skills/tencent-ride/`），随仓库版本化，但通过文件系统加载——修改技能内容无需重新构建，重启应用即可生效。运行时代码只读使用该目录。启动时会强校验这三个技能存在，缺失则启动失败。其中 `skills/tencent-ride/scripts/` 下的 Python 脚本由打车工具在运行时复制到数据目录执行。
 
 接入新业务场景的方向：新增一个技能目录携带该领域的红线、工具速查与画像 schema，记忆与权限内核保持不变。
 
@@ -127,5 +130,10 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 - 「查询麦当劳常见餐品的营养信息，帮我搭配一份约 600 千卡的餐食。」
 - 「获取我的可配送地址列表。」
 - 「帮我在附近的门店点一份巨无霸套餐。」
+
+微博与打车渠道（需先完成微博 OAuth 授权 / 配置 `TENCENT_RIDE_TOKEN`）：
+
+- 「读取我最近发布的微博，最多读取 5 条，整理一份带原文链接的摘要。不要评论或点赞。」
+- 「我要打车。」（助手会主动询问本次城市与上下车地点，询价后经确认才下单）
 
 只读查询由模型自主完成；下单等写操作会进入审核——配置了 Jev 时审核通过会自动执行（回复中会注明），否则在页面上弹出确认卡片，允许后才会真正执行。

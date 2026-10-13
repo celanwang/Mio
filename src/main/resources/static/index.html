@@ -102,6 +102,7 @@ button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible{o
 .message.user{flex-direction:row-reverse}.message.user .avatar{color:#fff;background:var(--gradient-brand);border-color:rgba(139,118,237,.3)}.message.user .message-main{text-align:right}.message.user .message-label{justify-content:flex-end;margin-right:2px}
 .message.user .message-body{display:inline-block;max-width:100%;background:var(--user);border:1px solid color-mix(in srgb,var(--purple) 22%,transparent);border-radius:var(--r-lg) 4px var(--r-lg) var(--r-lg);padding:14px 18px;text-align:left;white-space:pre-wrap}
 .message-actions{display:flex;align-items:center;gap:6px;margin-top:10px}.message-actions button{display:flex;align-items:center;gap:6px;min-height:28px;background:transparent;border:0;color:var(--muted);padding:2px 0;font-size:12px}.message-actions button:hover{color:var(--cyan)}.message-actions .icon{width:14px;height:14px}
+.weibo-action{margin-top:14px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--soft)}.weibo-action p{margin:0 0 10px;color:var(--secondary);font-size:14px;line-height:1.7}.weibo-action-actions{display:flex;flex-wrap:wrap;gap:8px}.weibo-action .quiet{font-size:13px;text-decoration:none}.weibo-action a.quiet{display:inline-flex;align-items:center;color:var(--cyan)}
 .thinking{display:flex;align-items:center;gap:7px;color:var(--secondary);font-size:14px;padding:3px 0}.thinking i{height:5px;width:5px;background:var(--purple);border-radius:50%;animation:breathe 1.4s infinite}.thinking i:nth-child(2){animation-delay:.2s}.thinking i:nth-child(3){animation-delay:.4s}.thinking span{margin-left:5px}
 #confirmations{margin:0 0 12px}
 .confirmation-header{display:flex;align-items:flex-start;gap:10px;padding:0 0 12px}.confirmation-header>.icon{width:21px;height:21px;color:var(--amber);margin-top:2px}.confirmation-header h3{margin:0 0 5px;font-size:16px;font-weight:600}.confirmation-header p{margin:0;color:var(--secondary);font-size:13px;line-height:1.7}
@@ -241,7 +242,7 @@ function showError(text) { $('error-text').textContent = text; $('error').hidden
 $('dismiss-error').onclick = () => $('error').hidden = true;
 function storageKey() { return 'mio-chat-v2:' + apiBase; }
 function save() { writeStore('sessionStorage',storageKey(),JSON.stringify(chat)); }
-function createChat() { return { id: globalThis.crypto?.randomUUID?.() || 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2), sessionId: null, messages: [], pendingConfirmations: [] }; }
+function createChat() { return { id: globalThis.crypto?.randomUUID?.() || 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2), sessionId: null, messages: [], pendingConfirmations: [], weiboAction:null, weiboAuthorizationPending:false }; }
 function validCalls(calls) {
   if (!Array.isArray(calls) || calls.some(c => !c || typeof c.toolCallId !== 'string' || !c.toolCallId || typeof c.name !== 'string') || new Set(calls.map(c => c.toolCallId)).size !== calls.length) throw new Error('服务返回的操作确认格式异常，请开启新对话后重试。');
   return calls;
@@ -252,7 +253,7 @@ function loadChat() {
     const stored = JSON.parse(readStore('sessionStorage',storageKey()) || 'null');
     if (stored && typeof stored.id === 'string' && stored.id && Array.isArray(stored.messages) && stored.messages.every(m => m && ['user','assistant'].includes(m.role) && typeof m.content === 'string')) {
       validCalls(stored.pendingConfirmations || []);
-      chat = { id:stored.id, messages:stored.messages, sessionId:typeof stored.sessionId === 'string' ? stored.sessionId : null, pendingConfirmations:stored.pendingConfirmations || [] };
+      chat = { id:stored.id, messages:stored.messages, sessionId:typeof stored.sessionId === 'string' ? stored.sessionId : null, pendingConfirmations:stored.pendingConfirmations || [], weiboAction:validWeiboAction(stored.weiboAction), weiboAuthorizationPending:stored.weiboAuthorizationPending === true };
     }
   } catch (_) {}
   render();
@@ -276,6 +277,61 @@ async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('已复制'); }
   catch (_) { showError('复制失败，请选择文字后手动复制。'); }
 }
+
+// 微博入口只附在当前请求的回复中；普通聊天和打开页面不查询微博状态。
+let checkingWeiboAuthorization = false;
+function validWeiboAction(action) {
+  if (action == null) return null;
+  if (!['authorize','retry'].includes(action.type) || typeof action.message !== 'string') throw new Error('微博授权提示格式异常，请稍后重试。');
+  return { type:action.type,message:action.message };
+}
+function renderWeiboAction(parent,action) {
+  const card = el('div','weibo-action'), buttons = el('div','weibo-action-actions');
+  card.setAttribute('role','group'); card.setAttribute('aria-label',action.type === 'authorize' ? '本次微博请求需要授权' : '本次微博请求连接失败');
+  card.append(el('p','',action.message));
+  if (action.type === 'authorize') {
+    const link = el('a','quiet','授权微博');
+    link.href = apiBase + '/api/weibo/connect?from=chat'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    link.onclick = event => {
+      if (busy || checkingWeiboAuthorization) { event.preventDefault(); return; }
+      chat.weiboAuthorizationPending = true; save(); toast('请在新页面完成授权，返回后会继续当前请求。');
+    };
+    const resume = el('button','quiet',checkingWeiboAuthorization ? '正在确认授权…' : '授权完成，继续');
+    resume.type = 'button'; resume.disabled = busy || checkingWeiboAuthorization;
+    resume.onclick = () => resumeWeiboAuthorization(true);
+    buttons.append(link,resume);
+  } else {
+    const retry = el('button','quiet','重试本次微博请求'); retry.type = 'button'; retry.disabled = busy;
+    retry.onclick = () => sendMessage('请重试刚才的微博请求。'); buttons.append(retry);
+  }
+  const cancel = el('button','quiet','稍后再说'); cancel.type = 'button'; cancel.disabled = busy;
+  cancel.onclick = () => { chat.weiboAction = null; chat.weiboAuthorizationPending = false; save(); render(); };
+  buttons.append(cancel); card.append(buttons); parent.append(card);
+}
+async function resumeWeiboAuthorization(manual = false) {
+  if (busy || checkingWeiboAuthorization || chat.weiboAction?.type !== 'authorize' || (!manual && !chat.weiboAuthorizationPending)) return;
+  const current = chat, action = chat.weiboAction, base = apiBase, controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(),10000);
+  checkingWeiboAuthorization = true; render();
+  try {
+    const response = await fetch(base + '/api/weibo/status', { cache:'no-store',signal:controller.signal });
+    if (!response.ok) throw new Error('暂时无法确认微博授权，请检查后端服务后再试。');
+    const status = await response.json();
+    if (!status || typeof status.enabled !== 'boolean' || typeof status.authorized !== 'boolean') throw new Error('微博授权状态格式异常，请检查后端版本。');
+    if (chat !== current || apiBase !== base || chat.weiboAction !== action || busy) return;
+    if (!status.enabled) throw new Error('微博服务未启用，暂时无法继续。');
+    if (!status.authorized) { if (manual) toast('尚未完成微博授权，请在授权页面完成后返回。'); return; }
+    chat.weiboAuthorizationPending = false; chat.weiboAction = null; save();
+    await sendMessage('微博授权已完成，请继续刚才的微博请求。');
+  } catch (error) {
+    if (chat !== current || apiBase !== base || chat.weiboAction !== action || busy) return;
+    if (manual) showError(error.name === 'AbortError' ? '确认微博授权超时，请稍后再试。' : error.message);
+    else { chat.weiboAction.message = '暂时无法确认授权状态，请点击“授权完成，继续”再试。'; save(); }
+  } finally {
+    clearTimeout(timeout); checkingWeiboAuthorization = false; render();
+  }
+}
+document.addEventListener('visibilitychange',() => { if (!document.hidden && chat?.weiboAuthorizationPending) resumeWeiboAuthorization(); });
 
 // 保守的 Markdown 展示：仅创建 DOM 节点，用户、模型及工具返回的 HTML 均不会执行。
 function inlineMarkdown(parent,text) {
@@ -348,6 +404,7 @@ function addMessage(message,pending = false) {
   else if (message.role === 'user') body.textContent = message.content;
   else renderMarkdown(body,message.content);
   main.append(label,body); row.append(avatar,main);
+  if (!pending && message.role === 'assistant' && message === chat.messages.at(-1) && chat.weiboAction) renderWeiboAction(main,chat.weiboAction);
   if (message.role === 'assistant' && !pending) { const actions = el('div','message-actions'), button = el('button'); button.type = 'button'; button.append(icon('copy'),el('span','','复制回答')); button.onclick = () => copyText(message.content); actions.append(button); main.append(actions); }
   $('messages').append(row); return row;
 }
@@ -378,6 +435,11 @@ const operations = {
 const operationName = call => call.name.split('__').pop().replace(/_/g,'-');
 function operationInfo(call) {
   if (!call) return ['外部服务操作','助手需要调用外部服务。'];
+  if (call.name === 'tencent_ride_create_order') return ['确认叫车',call.input?.summary || '请核对本次行程、车型和预估金额，批准仅适用于这一次叫车。'];
+  if (call.name === 'tencent_ride') {
+    const titles = { 'create-order':'确认叫车','cancel-order':'取消打车订单','set-resident-city':'设置常住城市','addr-upsert-value':'保存常用地点','short-cut-upsert-value':'保存快捷叫车偏好','delete-state':'清空本次行程草稿' };
+    return [titles[call.input?.command] || '腾讯打车操作',call.input?.summary || '请核对下方操作参数，批准仅适用于这一次调用。'];
+  }
   return operations[operationName(call)] || ['外部服务操作',typeof call.description === 'string' && call.description.trim() ? call.description.slice(0,240) : '助手需要调用外部服务来完成你的请求，请查看详情后决定是否允许。'];
 }
 const inputLabels = { address:'地址',addressId:'地址编号',address_id:'地址编号',phone:'联系电话',mobile:'手机号',name:'姓名',contactName:'联系人',contact_name:'联系人',storeId:'门店编号',store_id:'门店编号',orderId:'订单编号',order_id:'订单编号',productId:'餐品编号',product_id:'餐品编号',quantity:'数量',couponId:'优惠券编号',coupon_id:'优惠券编号',latitude:'纬度',longitude:'经度',items:'餐品',products:'餐品',remark:'备注',amount:'金额',total:'总计' };
@@ -437,6 +499,7 @@ document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = 
 async function sendMessage(text,confirmations = []) {
   if (busy) return;
   const isConfirmation = confirmations.length > 0; if (!isConfirmation && (!text || chat.pendingConfirmations.length)) return;
+  chat.weiboAuthorizationPending = false;
   $('error').hidden = true; const userMessage = { role:'user',content:text }; if (!isConfirmation) chat.messages.push(userMessage);
   $('message').value = ''; resizeInput(); render(); setBusy(true);
   const pending = addMessage({ role:'assistant',content:isConfirmation ? '正在根据你的决定继续处理…' : '正在思考并处理你的请求…' },true); scrollToLatest();
@@ -449,13 +512,14 @@ async function sendMessage(text,confirmations = []) {
     }
     const data = await response.json();
     if (typeof data.reply !== 'string' || typeof data.sessionId !== 'string' || !data.sessionId) throw new Error('没有收到有效的回复和会话编号，请稍后重试。');
-    const calls = validCalls(data.pendingConfirmations ?? []); chat.sessionId = data.sessionId;
+    const calls = validCalls(data.pendingConfirmations ?? []), weiboAction = validWeiboAction(data.weiboAction); chat.sessionId = data.sessionId;
     if (isConfirmation) {
       const allAllowed = confirmations.every(c => c.approved), allDenied = confirmations.every(c => !c.approved);
       const decisionText = allAllowed ? '允许本次操作' : allDenied ? '拒绝本次操作' : confirmations.map(c => `${c.approved ? '允许' : '拒绝'}：${operationInfo(chat.pendingConfirmations.find(call => call.toolCallId === c.toolCallId))[0]}`).join('\n');
       chat.messages.push({ role:'user',content:decisionText });
     }
     chat.pendingConfirmations = calls;
+    chat.weiboAction = weiboAction;
     chat.messages.push({ role:'assistant',content:data.reply || (calls.length ? '需要你确认以下操作后，才能继续。' : '本次处理已结束。'),elapsed:((performance.now()-start)/1000).toFixed(1) });
   } catch (error) {
     // 失败时保留原输入或输入区的待确认操作，允许修改、重试，不自动批准任何操作。
@@ -472,6 +536,7 @@ $('export').onclick = () => {
   link.href = url; link.download = 'Mio-对话-' + new Date().toLocaleDateString('sv-SE') + '.md'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),1000); toast('Markdown 对话已导出');
 };
 loadChat();
+if (chat.weiboAuthorizationPending && !document.hidden) resumeWeiboAuthorization();
 
 // 与参考页呼应的细网格和漂浮粒子；隐藏标签页暂停绘制，尊重减少动画设置。
 (() => {

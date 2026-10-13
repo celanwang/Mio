@@ -20,13 +20,17 @@ public final class ToolPolicies {
             "mall-points-products", "mall-product-detail", "mall-order-list", "mall-order-detail",
             "campaign-calendar",
             "query-party-store", "query-party-store-date", "query-party-store-session",
-            "query-party-city");
+            "query-party-city",
+            // 微博本机准备步骤：只检查授权并建立连接，不执行业务操作。
+            "prepare_weibo");
 
     /** 写操作：先由 Jev 审核，通过自动执行，不通过转人工确认。 */
     public static final Set<String> GUARDED = Set.of(
             "create-order", "cancel-order", "auto-bind-coupons",
             "delivery-create-address", "mall-create-order", "party-order-create",
-            "draw-lottery");
+            "draw-lottery",
+            // 腾讯打车：询价/查询由工具自身放行，需确认的命令与下单进入审核。
+            "tencent_ride", "tencent_ride_create_order");
 
     /** 允许习惯检测生成自动化提议的白名单工具（非白名单工具永不提议）。 */
     public static final Set<String> AUTOMATABLE = Set.of(

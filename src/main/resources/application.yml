@@ -17,6 +17,23 @@ app:
       url: https://mcp.mcd.cn
       # 在运行配置中设置 MCD_MCP_TOKEN，填写麦当劳平台申请的令牌。
       token: ${MCD_MCP_TOKEN:}
+    weibo:
+      # 微博官方 MCP：OAuth 按需授权（无静态 token），授权凭证落盘本机 .weibo/auth.json（已 gitignore）。
+      enabled: ${WEIBO_MCP_ENABLED:true}
+      url: https://cli.weibo.com/mcp
+      callback-uri: http://127.0.0.1:${server.port}/api/weibo/callback
+      credentials-file: .weibo/auth.json
+
+  tencent-ride:
+    # 腾讯出行打车：本地 Python 桥接官方接口，Token 只经 stdin 传给子进程。
+    enabled: ${TENCENT_RIDE_ENABLED:true}
+    python: ${TENCENT_RIDE_PYTHON:python}
+    # 在 .env 或运行配置中设置 TENCENT_RIDE_TOKEN（腾讯出行服务小程序获取，见 tencent-ride 技能 quick-start）。
+    token: ${TENCENT_RIDE_TOKEN:}
+    # 可选；留空时助手会主动询问本次出行城市和具体上下车地点。
+    resident-city: ${TENCENT_RIDE_CITY:}
+    data-directory: .tencent-ride
+    timeout: 65s
 
   dashscope:
     # 留空时使用 AgentScope 默认地址；需要切换地域时填写该地域的 DashScope 地址。

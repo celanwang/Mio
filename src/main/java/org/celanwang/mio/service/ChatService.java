@@ -53,6 +53,7 @@ public class ChatService {
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
     private final ReActAgent agent;
+    private final WeiboMcpService weibo;
     private final JevClient jevClient;
     private final double jevThreshold;
     private final String modelName;
@@ -78,6 +79,7 @@ public class ChatService {
     }
 
     public ChatService(ReActAgent agent,
+                       WeiboMcpService weibo,
                        ObjectProvider<JevClient> jevClient,
                        @Value("${app.jev.auto-approve-threshold:0.8}") double jevThreshold,
                        @Value("${app.dashscope.model-name:qwen3-max}") String modelName,
@@ -88,6 +90,7 @@ public class ChatService {
                        HabitDetector habitDetector,
                        ObjectMapper objectMapper) {
         this.agent = agent;
+        this.weibo = weibo;
         this.jevClient = jevClient.getIfAvailable();
         this.jevThreshold = jevThreshold;
         this.modelName = modelName;
@@ -143,6 +146,7 @@ public class ChatService {
                     message = new UserMessage(request.getMessage());
                 }
                 List<String> autoApproved = new ArrayList<>();
+                weibo.clearConversationAction(sessionId);
                 return callWithJevApproval(message, context, autoApproved, sessionId)
                         .map(reply -> {
                             String text = reply.getTextContent();
@@ -434,6 +438,6 @@ public class ChatService {
         }).toList();
         String reply = StringUtils.hasText(text) ? text
                 : pending.isEmpty() ? "本次处理已结束。" : "需要你确认以下操作后，助手才能继续。";
-        return new ChatResponse(sessionId, reply, confirmations);
+        return new ChatResponse(sessionId, reply, confirmations, weibo.consumeConversationAction(sessionId));
     }
 }
