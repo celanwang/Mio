@@ -24,7 +24,7 @@
 
 - **画像三层作用域**：`global`（跨场景恒真，全量注入）/ `domains/{domain}`（领域隔离，按当前消息相关性注入）/ 会话级例外。晋升单向，信任规则绑定 `{server, 工具, 参数模式}`，零跨域迁移——在一个场景积累的信任，一丝一毫不会泄漏到另一个场景。
 - **技能（SKILL）是领域知识包**：红线规则、工具速查、错误恢复由开发者编写、随仓库版本化；画像学的是"用户是谁"，技能教的是"领域怎么运作"，两者正交互补，安全红线永远留在版本化的技能层而非可变的记忆里。
-- **权限链**：只读操作自主执行；写操作进入审核——配置 Jev 时先由 Jev 判断与用户意图的一致性（通过自动执行），不通过或未配置则转人工在页面确认。Jev 同时按请求复杂度三档路由模型（长任务/高要求走主模型，点餐、打车等工具流程走标准模型 `qwen3.7-plus`，简单请求走轻量模型）。
+- **权限链（`security` 包，唯一裁决点 `PolicyEngine`）**：规则只按工具名匹配，三态 allow/ask/deny，求值固定 deny > ask > allow，无规则覆盖一律转人工。只读操作自主执行；写操作按可逆性分三轨——不可逆操作（下单/支付类）走硬人工轨永远人工确认，可逆写操作走自动审核轨（配置 Jev 时先判断与用户意图的一致性，通过自动执行，不通过或未配置转人工），首次出现的新工具一律人工并在确认卡片标记「首见」提示核对描述。每次裁决写 `policy_decision` 事件留痕。配套机制：工具返回统一以 `<tool_data>` 分隔符包裹（数据而非指令）；工具注册守卫防多来源同名遮蔽（冲突即失败）；ReAct 循环显式迭代上限；急停开关（`POST /api/security/kill-switch`）开启后非只读一律转人工并吊销全部 ACTIVE 自动化；`/chat` 与 `/api/**` 仅允许本机回环访问。裁决器支持 `shadow`（只留痕）/`enforce` 两档模式，当前默认 shadow。Jev 同时按请求复杂度三档路由模型（长任务/高要求走主模型，点餐、打车等工具流程走标准模型 `qwen3.7-plus`，简单请求走轻量模型）。
 - **渐进式自治**：信任统计目前只观察不放行；自动化规则走"习惯发现 → 提议 → 用户批准 → 会话开始执行"，且执行不绕过现有权限链。介入点从"每次执行前"前移到"规则创建时"。
 
 ## 运行要求
@@ -57,7 +57,7 @@ chmod 600 .env
 | `DASHSCOPE_API_KEY` | DashScope API key（必填，否则无法聊天）。 |
 | `MCD_MCP_ENABLED` | 是否连接麦当劳 MCP（首个场景），默认 `true`。设为 `false` 可跳过连接，只做普通聊天。 |
 | `MCD_MCP_TOKEN` | 麦当劳 MCP 令牌，在 [open.mcd.cn/mcp/doc](https://open.mcd.cn/mcp/doc) 控制台申请；填写有效 token 并把 `MCD_MCP_ENABLED` 设为 `true` 后才能点餐。 |
-| `WEIBO_MCP_ENABLED` | 是否启用微博官方 MCP，默认 `true`。微博无静态 token：首次微博任务时页面提供「授权微博」入口，OAuth 完成后凭证保存在本机 `.weibo/auth.json`（已 gitignore），授权管理接口仅允许本机访问。 |
+| `WEIBO_MCP_ENABLED` | 是否启用微博官方 MCP，默认 `true`。微博无静态 token：首次微博任务时页面提供「授权微博」入口，OAuth 完成后凭证保存在本机 `.weibo/auth.json`（已 gitignore）；对话与管理接口统一仅允许本机回环访问。 |
 | `TENCENT_RIDE_ENABLED` / `TENCENT_RIDE_TOKEN` | 腾讯出行打车开关（默认 `true`）与令牌；token 获取方式见 `skills/tencent-ride` 技能的 quick-start 说明，只经 stdin 传给本地 Python 子进程，不入日志与工具 schema。 |
 | `TENCENT_RIDE_PYTHON` / `TENCENT_RIDE_CITY` | 可选，Python 解释器路径（默认 `python`）与常住城市（留空则打车时主动询问本次城市）。 |
 | `DASHSCOPE_BASE_URL` | 可选，切换 DashScope 地域地址。 |
@@ -69,6 +69,9 @@ chmod 600 .env
 | `JEV_ENABLED` | 可选，默认 `true`，设为 `false` 关闭 Jev 审核。 |
 | `JEV_AUTO_APPROVE_THRESHOLD` | 可选，Jev 自动放行的 Noul 概率阈值，默认 `0.8`。 |
 | `MIO_SKILLS_DIR` | 可选，Agent 技能目录（文件系统路径），默认项目根目录下的 `./skills`。 |
+| `MIO_SECURITY_LOCAL_ONLY` | 可选，默认 `true`，`/chat` 与 `/api/**` 仅允许本机回环访问；仅在部署形态变化时考虑关闭并另行加固。 |
+| `MIO_SECURITY_POLICY_MODE` | 可选，权限裁决模式：`shadow`（默认，裁决只留痕不改变行为）/ `enforce`（硬编码 DENY 规则真正生效）。 |
+| `MIO_AGENT_MAX_ITERS` | 可选，ReAct 循环迭代上限，默认 `20`。 |
 | `MIO_DISTILLER_ENABLED` | 可选，默认 `true`，设为 `false` 关闭对话中的画像自动提炼。 |
 | `MIO_HABIT_DETECTOR_ENABLED` | 可选，默认 `true`，设为 `false` 关闭习惯检测（不再生成自动化提议）。 |
 | `MIO_INJECT_FILTER_ENABLED` | 可选，默认 `true`，画像注入按当前消息相关性过滤（global 全量、领域条目按相关性）；设为 `false` 回退为全量注入。 |
@@ -138,4 +141,4 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 - 「读取我最近发布的微博，最多读取 5 条，整理一份带原文链接的摘要。不要评论或点赞。」
 - 「我要打车。」（助手会主动询问本次城市与上下车地点，询价后经确认才下单）
 
-只读查询由模型自主完成；下单等写操作会进入审核——配置了 Jev 时审核通过会自动执行（回复中会注明），否则在页面上弹出确认卡片，允许后才会真正执行。
+只读查询由模型自主完成；写操作按可逆性分轨：下单/支付类不可逆操作一律在页面弹出确认卡片（首次出现的新工具会额外标记「首见」提示），可逆写操作配置了 Jev 时审核通过会自动执行（回复中会注明），否则同样在页面确认，允许后才会真正执行。
