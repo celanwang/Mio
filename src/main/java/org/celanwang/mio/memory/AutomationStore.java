@@ -68,6 +68,18 @@ public class AutomationStore {
         return decide(id, AutomationRule.Status.REJECTED);
     }
 
+    /** 急停：吊销全部 ACTIVE 自动化规则（ACTIVE → REJECTED），返回吊销数量。 */
+    public synchronized int revokeAllActive() {
+        try {
+            return jdbc.update("UPDATE automations SET status = ?, decided_at = ? WHERE status = ?",
+                    AutomationRule.Status.REJECTED.name(), System.currentTimeMillis(),
+                    AutomationRule.Status.ACTIVE.name());
+        } catch (Exception e) {
+            log.error("自动化批量吊销失败（fail-closed）：{}", e.getMessage());
+            return 0;
+        }
+    }
+
     public List<AutomationRule> rules() {
         return query("SELECT id, title, tool_name, trigger_kind, status, reason, created_at, decided_at"
                 + " FROM automations ORDER BY created_at");
