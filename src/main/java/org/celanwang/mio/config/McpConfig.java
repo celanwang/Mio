@@ -3,6 +3,7 @@ package org.celanwang.mio.config;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
+import org.celanwang.mio.security.ToolRegistrationGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -50,12 +51,26 @@ public class McpConfig {
     }
 
     @Bean
-    public Toolkit toolkit(ObjectProvider<McpClientWrapper> mcdMcpClient) {
+    public Toolkit toolkit(ObjectProvider<McpClientWrapper> mcdMcpClient, ToolRegistrationGuard registrationGuard) {
         Toolkit toolkit = new Toolkit();
         McpClientWrapper client = mcdMcpClient.getIfAvailable();
         if (client != null) {
             // 自动发现并注册远程工具，智能体可根据用户的中文请求选择工具。
+            try {
+                client.initialize().block(Duration.ofSeconds(45));
+            } catch (Exception e) {
+                log.warn("初始化麦当劳 MCP 失败，跳过注册（点餐工具不可用）：{}", e.getMessage());
+                return toolkit;
+            }
+            var tools = client.listTools().block(Duration.ofSeconds(45));
+            if (tools == null || tools.isEmpty()) {
+                log.warn("麦当劳 MCP 未返回可用工具，跳过注册（点餐工具不可用）。");
+                return toolkit;
+            }
+            // 注册守卫：同名静默覆盖即启动失败（防工具遮蔽）。
+            var before = registrationGuard.snapshot(toolkit);
             toolkit.registerMcpClient(client).block(Duration.ofSeconds(45));
+            registrationGuard.verifyMcpRegistration(toolkit, before, tools.size(), "mcd-mcp");
         }
         return toolkit;
     }

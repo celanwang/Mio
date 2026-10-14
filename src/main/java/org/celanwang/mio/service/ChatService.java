@@ -7,6 +7,8 @@ import org.celanwang.mio.memory.TrustStore;
 import org.celanwang.mio.model.dto.ChatRequest;
 import org.celanwang.mio.model.vo.ChatResponse;
 import org.celanwang.mio.model.vo.ToolConfirmation;
+import org.celanwang.mio.security.PolicyDecision;
+import org.celanwang.mio.security.PolicyEngine;
 import org.celanwang.mio.trace.TraceStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.ReActAgent;
@@ -20,6 +22,7 @@ import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.state.AgentState;
+import io.agentscope.core.tool.ToolBase;
 import io.agentscope.extensions.judge.jev.Answer;
 import io.agentscope.extensions.judge.jev.JevClient;
 import io.agentscope.extensions.judge.jev.NoulAnswer;
@@ -60,14 +63,13 @@ public class ChatService {
     private final String jevModel;
     private final TraceStore traceStore;
     private final TrustStore trustStore;
+    private final PolicyEngine policyEngine;
     private final MioLongTermMemory longTermMemory;
     private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
     private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
     /** Jev 判定结果（toolCallId → 是否通过），供误拦信号比对；有界 LRU 防泄漏。 */
     private final Map<String, Boolean> jevVerdicts = boundedMap(500);
-    /** 会话级自动放行 create-order 的时间，供误放行信号比对。 */
-    private final Map<String, Long> autoApprovedOrderAt = boundedMap(500);
 
     private static <K, V> Map<K, V> boundedMap(int maxSize) {
         return Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
@@ -86,6 +88,7 @@ public class ChatService {
                        @Value("${app.jev.model:jev-latest}") String jevModel,
                        TraceStore traceStore,
                        TrustStore trustStore,
+                       PolicyEngine policyEngine,
                        MioLongTermMemory longTermMemory,
                        HabitDetector habitDetector,
                        ObjectMapper objectMapper) {
@@ -97,6 +100,7 @@ public class ChatService {
         this.jevModel = jevModel;
         this.traceStore = traceStore;
         this.trustStore = trustStore;
+        this.policyEngine = policyEngine;
         this.longTermMemory = longTermMemory;
         this.habitDetector = habitDetector;
         this.objectMapper = objectMapper;
@@ -170,11 +174,12 @@ public class ChatService {
         return agent.call(List.of(message), context).flatMap(reply -> {
             String effectiveModel = traceRouting(sessionId, context);
             traceNewMessages(sessionId, context, before, effectiveModel);
+            auditPolicyDecisions(sessionId, context, before);
             recordLongTermMemory(context, sessionId);
             habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
-            if (pending.isEmpty() || jevClient == null
-                    || pending.stream().anyMatch(call -> !ToolPolicies.GUARDED.contains(call.getName()))) {
+            if (pending.isEmpty() || jevClient == null || policyEngine.isCircuitOpen()
+                    || pending.stream().anyMatch(call -> !ToolPolicies.JEV_REVIEWABLE.contains(call.getName()))) {
                 if (!pending.isEmpty()) {
                     traceStore.append(sessionId, "human", "ask", "等待人工确认",
                             "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());
@@ -191,9 +196,6 @@ public class ChatService {
                             return Mono.just(reply);
                         }
                         autoApproved.addAll(pending.stream().map(ToolUseBlock::getName).toList());
-                        if (pending.stream().anyMatch(call -> "create-order".equals(call.getName()))) {
-                            autoApprovedOrderAt.put(sessionId, System.currentTimeMillis());
-                        }
                         List<ConfirmResult> results = pending.stream()
                                 .map(call -> new ConfirmResult(true, call)).toList();
                         UserMessage resume = UserMessage.builder()
@@ -251,6 +253,32 @@ public class ChatService {
         return state == null ? 0 : state.getContext().size();
     }
 
+    /**
+     * 影子审计：对本轮每个新工具调用运行 PolicyEngine 裁决并留痕（policy_decision 事件）。
+     * shadow 模式下裁决不影响实际执行，用于与真实结果对照；enforce 模式下同一裁决器即生效规则来源。
+     */
+    private void auditPolicyDecisions(String sessionId, RuntimeContext context, int before) {
+        AgentState state = agent.getAgentState(context);
+        if (state == null) {
+            return;
+        }
+        List<Msg> messages = state.getContext();
+        for (int i = Math.max(before, 0); i < messages.size(); i++) {
+            Msg message = messages.get(i);
+            if (message.getRole() != MsgRole.ASSISTANT) {
+                continue;
+            }
+            for (ToolUseBlock call : message.getContentBlocks(ToolUseBlock.class)) {
+                var tool = agent.getToolkit().getTool(call.getName());
+                boolean readOnly = tool instanceof ToolBase base && base.isReadOnly();
+                PolicyDecision decision = policyEngine.evaluate(call.getName(), readOnly);
+                traceStore.append(sessionId, "policy", "policy_decision",
+                        "裁决 " + call.getName() + " → " + decision.effect(),
+                        decision.source() + "：" + decision.reason() + "，实际状态 " + call.getState());
+            }
+        }
+    }
+
     /** 读取 Jev 模型路由结果（若有），记录路由事件并返回本次实际生效的模型名。 */
     private String traceRouting(String sessionId, RuntimeContext context) {
         JevModelRouterMiddleware.RoutingDecision decision = JevModelRouterMiddleware.decision(context);
@@ -290,7 +318,6 @@ public class ChatService {
                     traceStore.append(sessionId, "tool:" + call.getName(), "tool_call",
                             "Qwen 发起工具调用 " + call.getName() + "（" + effectiveModel + "）",
                             truncate(toJson(call.getInput()), 2000));
-                    detectRegretSignal(sessionId, call.getName());
                 }
             } else if (message.getRole() == MsgRole.TOOL) {
                 for (ToolResultBlock result : message.getContentBlocks(ToolResultBlock.class)) {
@@ -299,21 +326,6 @@ public class ChatService {
                             truncate(outputText(result), 2000));
                 }
             }
-        }
-    }
-
-    /**
-     * 误放行信号（疑似）：Jev 自动放行 create-order 后 30 分钟内出现 cancel-order，
-     * 说明自动执行的可能并非用户真实意图。只是统计信号（用户也可能正常改主意），供阈值调优参考。
-     */
-    private void detectRegretSignal(String sessionId, String toolName) {
-        if (!"cancel-order".equals(toolName)) {
-            return;
-        }
-        Long approvedAt = autoApprovedOrderAt.remove(sessionId);
-        if (approvedAt != null && System.currentTimeMillis() - approvedAt < 30 * 60 * 1000) {
-            traceStore.append(sessionId, "jev", "jev_mismatch", "Jev 误放行信号（疑似）",
-                    "create-order 自动放行后 30 分钟内用户发起 cancel-order");
         }
     }
 
@@ -434,7 +446,8 @@ public class ChatService {
         List<ToolConfirmation> confirmations = pending.stream().map(call -> {
             var tool = agent.getToolkit().getTool(call.getName());
             String description = tool == null ? call.getName() : tool.getDescription();
-            return new ToolConfirmation(call.getId(), call.getName(), description, call.getInput());
+            return new ToolConfirmation(call.getId(), call.getName(), description, call.getInput(),
+                    !trustStore.hasRecords(call.getName()));
         }).toList();
         String reply = StringUtils.hasText(text) ? text
                 : pending.isEmpty() ? "本次处理已结束。" : "需要你确认以下操作后，助手才能继续。";

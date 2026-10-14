@@ -454,6 +454,7 @@ function renderConfirmations() {
   calls.forEach(call => {
     const info = operationInfo(call), item = el('div','confirmation-item');
     item.append(el('div','operation-title',info[0]),el('p','operation-copy',info[1]));
+    if (call.firstSeen) item.append(el('p','operation-copy','该工具为首次出现的新工具，请核对其操作说明与参数后再决定。'));
     const details = el('details','operation-details'); details.append(el('summary','','查看操作详情')); const params = el('dl');
     if (!operations[operationName(call)]) params.append(el('dt','','操作'),el('dd','',call.name));
     const input = call.input && typeof call.input === 'object' ? Object.entries(call.input) : [];

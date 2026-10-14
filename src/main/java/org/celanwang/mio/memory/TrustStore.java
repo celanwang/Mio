@@ -41,6 +41,18 @@ public class TrustStore {
         }
     }
 
+    /** 该工具是否有任何人工确认记录（首见轨标记用）；查询失败按无记录处理，倒向首见提示。 */
+    public boolean hasRecords(String toolName) {
+        try {
+            Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(1) FROM trusts WHERE tool_name = ?", Integer.class, toolName);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.error("信任统计查询失败（fail-closed，按首见处理）：{}", e.getMessage());
+            return false;
+        }
+    }
+
     public List<TrustRule> rules() {
         try {
             return jdbc.query("""

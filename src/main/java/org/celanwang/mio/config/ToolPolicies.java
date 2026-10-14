@@ -3,8 +3,9 @@ package org.celanwang.mio.config;
 import java.util.Set;
 
 /**
- * 工具权限分层：只读工具自动放行，模型自主执行；写操作进入审核（Jev 通过则自动执行，
- * 不通过转人工确认）；未列入的工具按默认策略转人工确认。
+ * 工具权限分层：只读工具自动放行；写操作按可逆性分轨——不可逆操作（支付/下单/对外发布）
+ * 走硬人工轨，决定权永远在人；可逆写操作走自动审核轨，先由 Jev 审核，不通过转人工；
+ * 未列入的工具按默认策略转人工确认，并在确认卡片上标记首见。
  */
 public final class ToolPolicies {
 
@@ -24,13 +25,17 @@ public final class ToolPolicies {
             // 微博本机准备步骤：只检查授权并建立连接，不执行业务操作。
             "prepare_weibo");
 
-    /** 写操作：先由 Jev 审核，通过自动执行，不通过转人工确认。 */
-    public static final Set<String> GUARDED = Set.of(
-            "create-order", "cancel-order", "auto-bind-coupons",
-            "delivery-create-address", "mall-create-order", "party-order-create",
-            "draw-lottery",
-            // 腾讯打车：询价/查询由工具自身放行，需确认的命令与下单进入审核。
-            "tencent_ride", "tencent_ride_create_order");
+    /** 不可逆写操作（支付/下单）：硬人工轨，永远人工确认，不走 Jev 自动审核。 */
+    public static final Set<String> HUMAN_ONLY = Set.of(
+            "create-order", "mall-create-order", "party-order-create",
+            "tencent_ride_create_order");
+
+    /** 可逆写操作：自动审核轨，先由 Jev 审核，通过自动执行，不通过转人工确认。 */
+    public static final Set<String> JEV_REVIEWABLE = Set.of(
+            "cancel-order", "auto-bind-coupons",
+            "delivery-create-address", "draw-lottery",
+            // 腾讯打车：询价/查询由工具自身放行，需确认的命令进入审核。
+            "tencent_ride");
 
     /** 允许习惯检测生成自动化提议的白名单工具（非白名单工具永不提议）。 */
     public static final Set<String> AUTOMATABLE = Set.of(

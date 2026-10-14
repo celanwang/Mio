@@ -2,6 +2,7 @@ package org.celanwang.mio.service;
 
 import org.celanwang.mio.config.WeiboProperties;
 import org.celanwang.mio.model.vo.WeiboAction;
+import org.celanwang.mio.security.ToolRegistrationGuard;
 import org.celanwang.mio.tool.WeiboConnectionTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.tool.Toolkit;
@@ -27,21 +28,25 @@ public class WeiboMcpService {
     private final WeiboProperties properties;
     private final WeiboOAuthService oauth;
     private final Toolkit toolkit;
+    private final ToolRegistrationGuard registrationGuard;
     private McpClientWrapper client;
     private int toolCount;
     private String error;
     private final Map<String, WeiboAction> conversationActions = new ConcurrentHashMap<>();
 
     @Autowired
-    public WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, ReActAgent agent) {
+    public WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, ReActAgent agent,
+                           ToolRegistrationGuard registrationGuard) {
         // AgentScope 构建 Agent 时会复制 Toolkit；授权后的工具必须注册到实际运行的副本。
-        this(properties, oauth, agent.getToolkit());
+        this(properties, oauth, agent.getToolkit(), registrationGuard);
     }
 
-    WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, Toolkit toolkit) {
+    WeiboMcpService(WeiboProperties properties, WeiboOAuthService oauth, Toolkit toolkit,
+                    ToolRegistrationGuard registrationGuard) {
         this.properties = properties;
         this.oauth = oauth;
         this.toolkit = toolkit;
+        this.registrationGuard = registrationGuard;
         toolkit.removeTool(WeiboConnectionTool.NAME);
         toolkit.registerAgentTool(new WeiboConnectionTool(this));
     }
@@ -93,7 +98,10 @@ public class WeiboMcpService {
             candidate.initialize().block(Duration.ofSeconds(40));
             var tools = candidate.listTools().block(Duration.ofSeconds(40));
             if (tools == null || tools.isEmpty()) throw new IllegalStateException("微博没有返回可用工具。");
+            // 注册守卫：同名静默覆盖即连接失败（防工具遮蔽），不静默注册。
+            var before = registrationGuard.snapshot(toolkit);
             toolkit.registerMcpClient(candidate).block(Duration.ofSeconds(40));
+            registrationGuard.verifyMcpRegistration(toolkit, before, tools.size(), "weibo-mcp");
             client = candidate;
             toolCount = tools.size();
             error = null;

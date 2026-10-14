@@ -67,6 +67,14 @@ app:
     sys-prompt: "你是一个个人 AI 助手，请用中文回答用户的问题，并根据用户需求使用可用工具。"
     # Agent 技能目录（文件系统路径，默认项目根 ./skills）；修改技能无需重新构建。
     skills-dir: ${MIO_SKILLS_DIR:./skills}
+    # ReAct 循环迭代上限，防失控循环。
+    max-iters: ${MIO_AGENT_MAX_ITERS:20}
+
+  security:
+    # 接口最小鉴权：/chat 与 /api/** 仅允许本机回环访问。
+    local-only: ${MIO_SECURITY_LOCAL_ONLY:true}
+    # 权限裁决模式：shadow 只留痕不改变行为；enforce 安装硬编码 DENY 规则。
+    policy-mode: ${MIO_SECURITY_POLICY_MODE:shadow}
 
   memory:
     pg:
