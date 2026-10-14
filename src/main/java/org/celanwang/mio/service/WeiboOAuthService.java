@@ -3,15 +3,14 @@ package org.celanwang.mio.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.celanwang.mio.config.WeiboProperties;
+import org.celanwang.mio.security.Loopback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.InetAddress;
 import java.net.URLEncoder;
-import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -240,18 +239,7 @@ public class WeiboOAuthService {
     }
 
     public static boolean isLoopback(String host) {
-        if (host == null || host.isBlank()) return false;
-        if ("localhost".equalsIgnoreCase(host)) return true;
-        String address = host.startsWith("[") && host.endsWith("]") ? host.substring(1, host.length() - 1) : host;
-        // 仅解析 IP 字面量，避免对不可信 Host 做 DNS 查询。Tomcat 常将 ::1 展开为 0:0:0:0:0:0:0:1。
-        boolean ipv6 = address.contains(":") && address.matches("[0-9a-fA-F:.]+");
-        boolean ipv4 = address.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}");
-        if (!ipv6 && !ipv4) return false;
-        try {
-            return InetAddress.getByName(address).isLoopbackAddress();
-        } catch (UnknownHostException ignored) {
-            return false;
-        }
+        return Loopback.isLoopback(host);
     }
 
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }

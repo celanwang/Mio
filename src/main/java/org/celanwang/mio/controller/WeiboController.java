@@ -38,13 +38,11 @@ public class WeiboController {
     @GetMapping("/status")
     @CrossOrigin(origins = {PREVIEW_LOCALHOST, PREVIEW_LOOPBACK})
     public ResponseEntity<WeiboMcpService.Status> status(HttpServletRequest request) {
-        localOnly(request);
         return ResponseEntity.ok().header("Cache-Control", "no-store").body(mcp.status());
     }
 
     @GetMapping("/connect")
     public ResponseEntity<Void> connect(HttpServletRequest request, @RequestParam(required = false) String from) {
-        localOnly(request);
         URI callback = properties.getCallbackUri();
         // localhost 和 127.0.0.1 的 Cookie 不共享，先在回调所属域创建浏览器会话。
         if (!callback.getHost().equalsIgnoreCase(request.getServerName()) || callback.getPort() != request.getServerPort()) {
@@ -61,7 +59,6 @@ public class WeiboController {
                                          @RequestParam(required = false) String state,
                                          @RequestParam(required = false) String code,
                                          @RequestParam(required = false) String error) {
-        localOnly(request);
         HttpSession session = request.getSession(false);
         var pending = session == null ? null : (WeiboOAuthService.Authorization) session.getAttribute(PENDING);
         boolean fromChat = session != null && Boolean.TRUE.equals(session.getAttribute(FROM_CHAT));
@@ -91,7 +88,6 @@ public class WeiboController {
     @PostMapping("/reconnect")
     @CrossOrigin(origins = {PREVIEW_LOCALHOST, PREVIEW_LOOPBACK})
     public WeiboMcpService.Status reconnect(HttpServletRequest request) {
-        localOnly(request);
         String origin = request.getHeader("Origin");
         int port = request.getServerPort();
         boolean defaultPort = ("http".equals(request.getScheme()) && port == 80)
@@ -132,11 +128,5 @@ public class WeiboController {
     private static ResponseEntity<Void> redirect(URI uri) {
         return ResponseEntity.status(HttpStatus.FOUND).location(uri).header("Cache-Control", "no-store")
                 .header("Referrer-Policy", "no-referrer").build();
-    }
-
-    private static void localOnly(HttpServletRequest request) {
-        if (!WeiboOAuthService.isLoopback(request.getRemoteAddr()) || !WeiboOAuthService.isLoopback(request.getServerName())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "微博授权管理仅允许从本机访问。");
-        }
     }
 }
