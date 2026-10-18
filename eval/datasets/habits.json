@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "id": "habit-1",
+      "tool": "query-my-coupons",
+      "calls": 3,
+      "days": 2,
+      "expected_proposal": true
+    },
+    {
+      "id": "habit-2",
+      "tool": "query-my-coupons",
+      "calls": 2,
+      "days": 2,
+      "expected_proposal": false
+    },
+    {
+      "id": "habit-3",
+      "tool": "query-my-coupons",
+      "calls": 3,
+      "days": 1,
+      "expected_proposal": false
+    },
+    {
+      "id": "habit-4",
+      "tool": "auto-bind-coupons",
+      "calls": 4,
+      "days": 2,
+      "expected_proposal": true
+    },
+    {
+      "id": "habit-5",
+      "tool": "create-order",
+      "calls": 20,
+      "days": 3,
+      "expected_proposal": false
+    },
+    {
+      "id": "habit-6",
+      "tool": "unseen_write",
+      "calls": 20,
+      "days": 3,
+      "expected_proposal": false
+    }
+  ]
+}

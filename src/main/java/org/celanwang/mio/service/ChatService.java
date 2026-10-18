@@ -132,13 +132,7 @@ public class ChatService {
                     List<ConfirmResult> results = confirmResults(pending, decisions);
                     recordTrust(sessionId, pending, decisions);
                     traceStore.append(sessionId, "human", "confirm", "人工确认",
-                            pending.stream()
-                                    .map(call -> call.getName() + " → "
-                                            + (decisions.stream()
-                                                    .filter(d -> call.getId().equals(d.toolCallId()))
-                                                    .findFirst().map(ChatRequest.Confirmation::approved)
-                                                    .orElse(false) ? "允许" : "拒绝"))
-                                    .toList().toString());
+                            toJson(Map.of("schemaVersion", 1, "decisions", decisions)));
                     message = UserMessage.builder()
                             .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, results))
                             .build();
@@ -274,7 +268,10 @@ public class ChatService {
                 PolicyDecision decision = policyEngine.evaluate(call.getName(), readOnly);
                 traceStore.append(sessionId, "policy", "policy_decision",
                         "裁决 " + call.getName() + " → " + decision.effect(),
-                        decision.source() + "：" + decision.reason() + "，实际状态 " + call.getState());
+                        toJson(Map.of("schemaVersion", 1, "callId", call.getId(),
+                                "tool", call.getName(), "effect", decision.effect(),
+                                "source", decision.source(), "reason", decision.reason(),
+                                "state", call.getState())));
             }
         }
     }
@@ -323,7 +320,9 @@ public class ChatService {
                 for (ToolResultBlock result : message.getContentBlocks(ToolResultBlock.class)) {
                     traceStore.append(sessionId, "tool:" + result.getName(), "tool_result",
                             "工具返回 " + result.getName() + "（" + result.getState() + "）",
-                            truncate(outputText(result), 2000));
+                            toJson(Map.of("schemaVersion", 1, "callId", result.getId(),
+                                    "tool", result.getName(), "state", result.getState(),
+                                    "output", truncate(outputText(result), 2000))));
                 }
             }
         }

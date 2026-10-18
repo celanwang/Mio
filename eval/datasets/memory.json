@@ -1,0 +1,90 @@
+{
+  "version": "1",
+  "label_origin": "developer-authored synthetic seed",
+  "cases": [
+    {
+      "id": "memory-extraction",
+      "ability": "extraction",
+      "history": [
+        {
+          "id": "m1",
+          "session": "s1",
+          "timestamp": "2026-10-01T10:00:00+08:00",
+          "text": "点餐不要辣椒"
+        }
+      ],
+      "question": "点餐有什么忌口？",
+      "evidence_ids": [
+        "m1"
+      ],
+      "obsolete_ids": [],
+      "answer": "不要辣椒"
+    },
+    {
+      "id": "memory-temporal",
+      "ability": "temporal",
+      "history": [
+        {
+          "id": "m1",
+          "session": "s1",
+          "timestamp": "2026-10-01T10:00:00+08:00",
+          "text": "今天去杭州"
+        },
+        {
+          "id": "m2",
+          "session": "s2",
+          "timestamp": "2026-10-02T10:00:00+08:00",
+          "text": "今天到上海"
+        }
+      ],
+      "question": "10月1日去了哪里？",
+      "evidence_ids": [
+        "m1"
+      ],
+      "obsolete_ids": [],
+      "answer": "杭州"
+    },
+    {
+      "id": "memory-update",
+      "ability": "update",
+      "history": [
+        {
+          "id": "m1",
+          "session": "s1",
+          "timestamp": "2026-10-01T10:00:00+08:00",
+          "text": "常用地址为北京"
+        },
+        {
+          "id": "m2",
+          "session": "s2",
+          "timestamp": "2026-10-02T10:00:00+08:00",
+          "text": "搬家了，常用地址改为上海，北京作废"
+        }
+      ],
+      "question": "现在常用地址是什么？",
+      "evidence_ids": [
+        "m2"
+      ],
+      "obsolete_ids": [
+        "m1"
+      ],
+      "answer": "上海"
+    },
+    {
+      "id": "memory-abstention",
+      "ability": "abstention",
+      "history": [
+        {
+          "id": "m1",
+          "session": "s1",
+          "timestamp": "2026-10-01T10:00:00+08:00",
+          "text": "我喜欢咖啡"
+        }
+      ],
+      "question": "银行卡号是什么？",
+      "evidence_ids": [],
+      "obsolete_ids": [],
+      "answer": null
+    }
+  ]
+}
