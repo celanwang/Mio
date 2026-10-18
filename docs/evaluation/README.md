@@ -8,13 +8,13 @@
 ./scripts/mvn.sh -B verify
 ```
 
-Java 17，Maven 3.6.3+；macOS 可自动使用 IntelliJ 自带 Maven。所有默认测试都是普通 JUnit，不启动 Spring、不加载 `.env`，不连接模型、MCP、PG、微博或打车进程。CI 与本机运行同一命令。报告落在 gitignore 的 `target/`，不会把真实用户对话提交到仓库。
+Java 17，Maven 3.6.3+；macOS 可自动使用 IntelliJ 自带 Maven。所有默认测试都是普通 JUnit，不启动 Spring、不加载 `.env`，不连接模型、MCP、PG、微博或打车进程。评测通过本机命令执行。报告落在 gitignore 的 `target/`，不会把真实用户对话提交到仓库。
 
 ## 交付分期
 
 | 设计阶段 | 仓库实现 | 证据边界 |
 | --- | --- | --- |
-| 0 确定性地基 | 权限三态、工具注册、回环访问、工具数据包裹、画像规则、情景检索测试；GitHub Actions | 固定输入回归，不能证明模型可靠性 |
+| 0 确定性地基 | 权限三态、工具注册、回环访问、工具数据包裹、画像规则、情景检索测试；本地统一入口 | 固定输入回归，不能证明模型可靠性 |
 | 1 场景任务 | 三场景内存状态机、真实 ReAct/ChatService 权限集成、终态与动作断言 | 固定剧本模型只作为设施基线；实际模型采样另行导入 |
 | 2 组件黄金集与影子 | 审核阈值扫描、记忆四能力、习惯误报、既有事件影子日报和差异回归 | 无人工标签的事件不能当金标准 |
 | 3 注入与 judge | 注入全因子清单、红线映射、双序 judge 校准 | 有效性必须用模型观测；无数据报告不足 |
@@ -32,7 +32,7 @@ Phase 0 是文档中“第一期”的地基部分；此处拆细便于提交和
 
 ## 组件指标、黄金种子集与回归
 
-推荐统一入口 `./scripts/eval.sh`：运行 Java 测试、Python 指标自检，并输出 `target/evaluation/report.json`。CI 保存测试与 JSON 报告为 artifact。Python 只用标准库，读取 JSON/JSONL，不执行任何模型输出。
+推荐统一入口 `./scripts/eval.sh`：运行 Java 测试、Python 指标自检，并输出 `target/evaluation/report.json`。测试结果与 JSON 报告保存在本地 `target/`。Python 只用标准库，读取 JSON/JSONL，不执行任何模型输出。
 
 ```sh
 python3 -m eval.runner report --runs target/evaluation/fixture-runs.jsonl --output target/evaluation/report.json
@@ -86,7 +86,7 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 
 ## 显式真实模型采样
 
-模型采样器默认被 Maven tag 排除；CI 不需要模型密钥，也不触发付费请求。按需使用独立评测 key（经环境变量传入，勿放进命令参数或提交文件）：
+模型采样器默认被 Maven tag 排除；默认离线入口不需要模型密钥，也不触发付费请求。按需使用独立评测 key（经环境变量传入，勿放进命令参数或提交文件）：
 
 ```sh
 # 先在当前 shell/密钥管理器中设置 MIO_EVAL_API_KEY
@@ -107,4 +107,4 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 
 组件集（reviews/memory/habits/judge）的共同 `skill_sha256` 使用整个 `skills/` 目录指纹；单任务/注入使用该任务对应技能包指纹。可通过 `eval.runner.skill_digest('*')` 与 `skill_digest('mcd-ordering')` 等生成。黄金集默认视作开发者种子，需人工复核并将每条 `label_status` 标为 `human-reviewed` 后才进入正式门禁。规则登记完成全量审阅后，才能将 rules 的 `scope` 更新为 `complete`、`human_reviewed` 置 true，并为语义规则提供 `semantic-reviewed` 证据；不要用改标记代替实际标注与覆盖扩展。
 
-CI 联调还复现了生产会话锁的时序问题：Mono 响应先于 doFinally 可见，立即提交确认可能遇到上一请求尚未释放的锁。现使用请求令牌，在成功/失败值向下游发出前释放，取消仍执行最终清理；旧请求只能清理自己持有的令牌。确定性测试验证立即连续请求、旧 finalizer 不释放下一请求、取消与异常恢复。Jev 非有限数或超出 [0,1] 的分数一律转人工，不能因 Infinity 或 1.01 自动批准。
+跨环境联调还复现了生产会话锁的时序问题：Mono 响应先于 doFinally 可见，立即提交确认可能遇到上一请求尚未释放的锁。现使用请求令牌，在成功/失败值向下游发出前释放，取消仍执行最终清理；旧请求只能清理自己持有的令牌。确定性测试验证立即连续请求、旧 finalizer 不释放下一请求、取消与异常恢复。Jev 非有限数或超出 [0,1] 的分数一律转人工，不能因 Infinity 或 1.01 自动批准。

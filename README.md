@@ -146,6 +146,6 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 
 ## 评测体系
 
-运行 `./scripts/eval.sh` 执行完全离线的权限/记忆/习惯测试、三场景 mock 任务、注入四因子对照和指标自检。无需 `.env`、PG、模型 key 或真实业务工具；报告见 `target/evaluation/summary.md`，CI 保存原始观察与诊断。
+运行 `./scripts/eval.sh` 执行完全离线的权限/记忆/习惯测试、三场景 mock 任务、注入四因子对照和指标自检。无需 `.env`、PG、模型 key 或真实业务工具；报告见 `target/evaluation/summary.md`，原始观察与诊断保存在本地 `target/evaluation/`。
 
 [评测实现与运行说明](docs/evaluation/README.md) 对齐飞书《Iris - Evaluation Design》revision 26，涵盖黄金种子集、pass³、阈值校准、影子/回归、显式模型采样和晋升评审。固定剧本基线不等于模型资格；缺模型/人工标签/线上证据时门禁保持未就绪，不自动切换 enforce。
