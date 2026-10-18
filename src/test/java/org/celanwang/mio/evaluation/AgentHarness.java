@@ -33,9 +33,16 @@ final class AgentHarness implements AutoCloseable {
     ReActAgent agent;
     ChatService service;
     private final JevClient jev;
+    private final Model suppliedModel;
+    private final boolean delimiters;
+    private final String systemPrompt;
+    String userText = "SYNTHETIC evaluation task";
     final String session = UUID.randomUUID().toString();
 
-    AgentHarness(JevClient jev) { this.jev = jev; }
+    AgentHarness(JevClient jev) { this(jev, null, true, ""); }
+    AgentHarness(JevClient jev, Model model, boolean delimiters, String systemPrompt) {
+        this.jev = jev; this.suppliedModel = model; this.delimiters = delimiters; this.systemPrompt = systemPrompt;
+    }
     private void initialize() {
         if (agent != null) return;
         var model = mock(Model.class);
@@ -45,15 +52,20 @@ final class AgentHarness implements AutoCloseable {
             if (script.isEmpty()) return Flux.error(new AssertionError("Script exhausted; unexpected model turn"));
             return Flux.just(io.agentscope.core.model.ChatResponse.builder().content(script.removeFirst()).build());
         }));
-        agent = ReActAgent.builder().name("offline-eval").model(model).toolkit(toolkit)
+        var builder = ReActAgent.builder().name("offline-eval").sysPrompt(systemPrompt)
+                .model(suppliedModel == null ? model : suppliedModel).toolkit(toolkit)
                 .stateStore(new InMemoryAgentStateStore()).permissionContext(policy.permissionContext())
-                .hook(new UntrustedContentHook()).maxIters(12).build();
+                .generateOptions(io.agentscope.core.model.GenerateOptions.builder()
+                        .temperature(Double.parseDouble(System.getProperty("mio.eval.temperature", "0"))).build())
+                .maxIters(12);
+        if (delimiters) builder.hook(new UntrustedContentHook());
+        agent = builder.build();
         var memory = mock(MioLongTermMemory.class);
         when(memory.record(anyList(), anyString())).thenReturn(Mono.empty());
         @SuppressWarnings("unchecked") ObjectProvider<JevClient> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(jev);
         service = new ChatService(agent, mock(WeiboMcpService.class), provider, .8,
-                "scripted-fixture-v1", "mock-jev", traces, trust, policy, memory,
+                suppliedModel == null ? "scripted-fixture-v1" : suppliedModel.getModelName(), "mock-jev", traces, trust, policy, memory,
                 mock(HabitDetector.class), new ObjectMapper());
     }
     AgentHarness() { this(null); }
@@ -80,14 +92,14 @@ final class AgentHarness implements AutoCloseable {
     void say(String text) { script.add(List.of(TextBlock.builder().text(text).build())); }
     ChatResponse start() {
         initialize();
-        var request = new ChatRequest(); request.setSessionId(session); request.setMessage("SYNTHETIC evaluation task");
-        return service.chat(request).block(Duration.ofSeconds(10));
+        var request = new ChatRequest(); request.setSessionId(session); request.setMessage(userText);
+        return service.chat(request).block(Duration.ofSeconds(suppliedModel == null ? 10 : 60));
     }
     ChatResponse decide(ChatResponse pending, boolean approved) {
         var request = new ChatRequest(); request.setSessionId(session);
         request.setConfirmations(pending.getPendingConfirmations().stream()
                 .map(c -> new ChatRequest.Confirmation(c.toolCallId(), approved)).toList());
-        return service.chat(request).block(Duration.ofSeconds(10));
+        return service.chat(request).block(Duration.ofSeconds(suppliedModel == null ? 10 : 60));
     }
     @Override public void close() { if (agent != null) agent.close(); }
 }

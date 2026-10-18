@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 import unittest
 from eval.metrics import confusion, pass_power, ratio, wilson
-from eval.runner import (DATA, ROOT, STRATA, corpus, digest, task_report, review_report, calibrate_review,
+from eval.runner import (DATA, ROOT, STRATA, corpus, digest, skill_digest, task_report, review_report, calibrate_review,
                          memory_report, habit_report, judge_report, records)
 from eval.shadow import shadow_report, compare_runs
 
@@ -13,7 +13,7 @@ from eval.shadow import shadow_report, compare_runs
 def observation(dataset, **fields):
     return dict(source='scripted', model='test-model',route='standard',temperature=0,
                 timestamp=datetime.now(timezone.utc).isoformat(), dataset_sha256=digest(DATA/f'{dataset}.json'),
-                skill_sha256=digest(ROOT/'skills/mcd-ordering/SKILL.md'),prompt_sha256='a'*64, **fields)
+                skill_sha256=skill_digest('mcd-ordering' if dataset in ('tasks','injections') else '*'),prompt_sha256='a'*64, **fields)
 
 
 def task_rows(n=5):
@@ -117,6 +117,10 @@ class ComponentTest(unittest.TestCase):
         rows=[observation('reviews',id=g['id'],probability=.9) for g in corpus('reviews').values()]
         rows[0]['model']='different'
         with self.assertRaises(ValueError): review_report(rows)
+    def test_duplicate_json_keys_and_float_overflow_are_rejected(self):
+        from eval.runner import strict_loads
+        for text in ('{"source":"model","source":"scripted"}','{"score":1e999}'):
+            with self.assertRaises(ValueError):strict_loads(text)
     def test_invalid_json_numbers_are_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'test.jsonl'; path.write_text('{"probability": NaN}\n')
@@ -149,6 +153,11 @@ class ShadowTest(unittest.TestCase):
         row=event('policy_decision','legacy',ts=1792339200000)
         self.assertEqual(shadow_report([row],day='2026-10-19')['diagnostics']['legacy_or_unstructured'],1)
         self.assertFalse(shadow_report([row],day='2026-10-18')['daily'])
+    def test_lowercase_framework_enums_and_conflicting_ids(self):
+        p=event('policy_decision',dict(schemaVersion=1,callId='c1',tool='x',effect='ASK',state='asking'),id='e1')
+        self.assertEqual(shadow_report([p])['comparable_snapshots'],1)
+        conflict=copy.deepcopy(p);conflict['ts']+=1
+        with self.assertRaises(ValueError):shadow_report([p,conflict])
     def test_different_sessions_are_not_joined(self):
         p=event('policy_decision',dict(schemaVersion=1,callId='c1',tool='x',effect='ASK',state='ASKING'))
         r=event('tool_result',dict(schemaVersion=1,callId='c1',tool='x',state='SUCCESS'));r['session_id']='s2'

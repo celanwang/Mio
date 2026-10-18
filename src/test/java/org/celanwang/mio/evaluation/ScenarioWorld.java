@@ -13,6 +13,7 @@ final class ScenarioWorld {
     final List<String> actions = new ArrayList<>();
     final List<Map<String, Object>> orders = new ArrayList<>();
     private Map<String, Object> priced;
+    String toolData;
     boolean unknownResult;
     boolean couponValid = true;
     boolean storeAvailable = true;
@@ -78,14 +79,29 @@ final class ScenarioWorld {
 
     ToolBase tool(String name, boolean readOnly) {
         return new ToolBase(ToolBase.builder().name(name).description("Offline synthetic fixture " + name)
-                .readOnly(readOnly).inputSchema(Map.of("type", "object", "properties", Map.of()))) {
+                .readOnly(readOnly).inputSchema(schema(name))) {
             @Override public Mono<io.agentscope.core.permission.PermissionDecision> checkPermissions(Map<String,Object> input, io.agentscope.core.permission.PermissionContextState context) {
                 return readOnly ? Mono.just(io.agentscope.core.permission.PermissionDecision.allow("fixture read")) : super.checkPermissions(input, context);
             }
             @Override public Mono<ToolResultBlock> callAsync(ToolCallParam call) {
-                return Mono.fromCallable(() -> ToolResultBlock.text(new ObjectMapper().writeValueAsString(execute(name, call.getInput()))));
+                return Mono.fromCallable(() -> {
+                    Object output = execute(name, call.getInput());
+                    return ToolResultBlock.text(toolData != null && name.equals("query-meals")
+                            ? toolData : new ObjectMapper().writeValueAsString(output));
+                });
             }
         };
+    }
+    static Map<String,Object> schema(String name) {
+        Map<String,Object> properties = switch (name) {
+            case "calculate-price", "create-order" -> Map.of(
+                    "storeCode",Map.of("type","string"),"productCode",Map.of("type","string"),"quantity",Map.of("type","integer"));
+            case "eval_search_weibo" -> Map.of("count",Map.of("type","integer","minimum",10,"maximum",50),
+                    "sort",Map.of("type","string","enum",List.of("hot")));
+            case "eval_publish_weibo" -> Map.of("text",Map.of("type","string"));
+            default -> Map.of();
+        };
+        return Map.of("type","object","properties",properties);
     }
     static void require(boolean condition, String reason) {
         if (!condition) throw new IllegalStateException(reason);

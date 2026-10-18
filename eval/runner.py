@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import re
 import sys
+from zoneinfo import ZoneInfo
 from .metrics import confusion, pass_power, ratio, wilson
 from .shadow import shadow_report, compare_runs
 
@@ -23,10 +24,36 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def read_json(path):
+def skill_digest(skill):
+    root = ROOT/'skills' if skill == '*' else ROOT/'skills'/skill
+    result = hashlib.sha256()
+    for path in sorted(root.rglob('*')):
+        if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc' and path.name != '.DS_Store':
+            result.update(path.relative_to(root).as_posix().encode('utf-8'))
+            result.update(b'\0'); result.update(path.read_bytes()); result.update(b'\0')
+    return result.hexdigest()
+
+
+def strict_loads(text):
     def invalid(value):
         raise ValueError(f'non-finite JSON number {value}')
-    return json.loads(Path(path).read_text(), parse_constant=invalid)
+    def pairs(values):
+        result={}
+        for key,value in values:
+            if key in result:
+                raise ValueError(f'duplicate JSON key {key}')
+            result[key]=value
+        return result
+    def finite(value):
+        number=float(value)
+        if not math.isfinite(number):
+            raise ValueError('non-finite JSON float')
+        return number
+    return json.loads(text,parse_constant=invalid,parse_float=finite,object_pairs_hook=pairs)
+
+
+def read_json(path):
+    return strict_loads(Path(path).read_text())
 
 
 def records(path):
@@ -38,12 +65,14 @@ def records(path):
         for n, line in enumerate(path.read_text().splitlines(), 1):
             if line.strip():
                 try:
-                    result.append(json.loads(line, parse_constant=lambda v: (_ for _ in ()).throw(ValueError(v))))
+                    result.append(strict_loads(line))
                 except ValueError as e:
                     raise ValueError(f'{path}:{n}: {e}') from e
+        if not all(isinstance(row,dict) for row in result):
+            raise ValueError(f'{path}: each observation must be an object')
         return result
     value = read_json(path)
-    if not isinstance(value, list):
+    if not isinstance(value, list) or not all(isinstance(row,dict) for row in value):
         raise ValueError(f'{path}: expected a JSON array or JSONL')
     return value
 
@@ -71,7 +100,9 @@ def validate_provenance(row, dataset=None):
     for key in STRATA[4:]:
         if not re.fullmatch('[0-9a-f]{64}', row[key]):
             raise ValueError(f'{key} must be a SHA-256')
-    timestamp = datetime.fromisoformat(row.get('timestamp', '').replace('Z', '+00:00'))
+    if not isinstance(row.get('timestamp'),str):
+        raise ValueError('timestamp must be an ISO-8601 string')
+    timestamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
     if timestamp.tzinfo is None:
         raise ValueError('timestamp must include timezone')
     if dataset and row['dataset_sha256'] != digest(DATA / f'{dataset}.json'):
@@ -95,13 +126,16 @@ def task_report(rows, min_samples=5):
     gold = corpus('tasks')
     unique_rows(rows, ('task_id', 'sample_id', *STRATA))
     groups = defaultdict(list)
+    dates = defaultdict(set)
     outcomes = []
     for row in rows:
         validate_provenance(row, 'tasks')
+        if not isinstance(row['sample_id'],str) or not row['sample_id']:
+            raise ValueError('sample_id must be a nonempty string')
         task = gold.get(row['task_id'])
         if task is None:
             raise ValueError(f'unknown task {row["task_id"]}')
-        if row['skill_sha256'] != digest(ROOT / 'skills' / task['skill'] / 'SKILL.md'):
+        if row['skill_sha256'] != skill_digest(task['skill']):
             raise ValueError('skill hash mismatch')
         if not isinstance(row.get('final_state'), dict) or not isinstance(row.get('actions'), list):
             raise ValueError('task requires final_state object and ordered actions list')
@@ -115,12 +149,13 @@ def task_report(rows, min_samples=5):
         passed = not errors
         key = (row['task_id'], *(row[k] for k in STRATA))
         groups[key].append(passed)
+        dates[key].add(datetime.fromisoformat(row['timestamp'].replace('Z','+00:00')).astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat())
         outcomes.append(dict(task_id=row['task_id'], sample_id=row['sample_id'], passed=passed, errors=errors))
     summary = []
     for key, values in sorted(groups.items(), key=lambda kv: str(kv[0])):
         n, c = len(values), sum(values)
         summary.append(dict(task_id=key[0], **dict(zip(STRATA, key[1:])), trials=n, successes=c,
-                            pass_rate=c/n, pass_rate_ci95=wilson(c,n), pass_power_3=pass_power(c,n,3),
+                            sample_dates=sorted(dates[key]), pass_rate=c/n, pass_rate_ci95=wilson(c,n), pass_power_3=pass_power(c,n,3),
                             sufficient_samples=n >= min_samples,
                             qualifies_as_model_evidence=key[1] == 'model' and n >= min_samples))
     missing = sorted(set(gold)-{r['task_id'] for r in rows})
@@ -135,6 +170,8 @@ def joined(name, rows):
         if row.get('id') not in gold:
             raise ValueError(f'{name}: unknown ID {row.get("id")}')
         validate_provenance(row, name)
+        if row['skill_sha256'] != skill_digest('*'):
+            raise ValueError(f'{name}: component samples must fingerprint the full skills directory')
     if rows and len({tuple(r[k] for k in STRATA) for r in rows}) > 1:
         raise ValueError(f'{name}: mixed provenance; evaluate each model/route/version separately')
     return gold, [(gold[r['id']], r) for r in rows]
@@ -222,6 +259,9 @@ def make_report(task_rows, review_rows=(), memory_rows=(), habit_rows=(), judge_
     return dict(schema_version=1, generated_at=datetime.now(timezone.utc).isoformat(),
                 tasks=task_report(task_rows), reviews=review_report(list(review_rows)), memory=memory_report(list(memory_rows)),
                 habits=habit_report(list(habit_rows)), judge=judge_report(list(judge_rows)),
+                gold_labels_reviewed={name:all(g.get('label_status')=='human-reviewed' for g in corpus(name).values())
+                    for name in ('reviews','memory','habits')},
+                evaluation_targets=sorted({r.get('evaluation_target','unspecified') for r in task_rows}),
                 evidence_sources={name:sorted({r['source'] for r in rows}) for name,rows in
                     [('tasks',task_rows),('reviews',review_rows),('memory',memory_rows),('habits',habit_rows),('judge',judge_rows)]})
 
@@ -245,11 +285,36 @@ def main(argv=None):
     calibrate = subs.add_parser('calibrate'); calibrate.add_argument('--reviews',required=True); calibrate.add_argument('--output')
     shadow = subs.add_parser('shadow'); shadow.add_argument('--events',required=True); shadow.add_argument('--day'); shadow.add_argument('--output')
     compare = subs.add_parser('compare'); compare.add_argument('--before',required=True); compare.add_argument('--after',required=True); compare.add_argument('--output')
+    matrix = subs.add_parser('matrix'); matrix.add_argument('--samples',type=int,default=5); matrix.add_argument('--output')
+    injection = subs.add_parser('injections'); injection.add_argument('--runs',required=True); injection.add_argument('--output')
+    promotion = subs.add_parser('promotion'); promotion.add_argument('--report',required=True); promotion.add_argument('--injections',required=True); promotion.add_argument('--shadow',required=True); promotion.add_argument('--output',required=True)
+    coverage = subs.add_parser('coverage'); coverage.add_argument('--output')
+    events = subs.add_parser('events'); events.add_argument('--runs',required=True); events.add_argument('--output',required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == 'report':
             value = make_report(records(args.runs), records(args.reviews), records(args.memory), records(args.habits), records(args.judge))
             dump(value,args.output)
+        elif args.command == 'coverage':
+            from .coverage import coverage_report
+            dump(coverage_report(),args.output)
+        elif args.command == 'events':
+            exported=[]
+            for run in records(args.runs):
+                for event in run.get('events',[]):
+                    exported.append(dict(event,session_id=run['session_id']))
+            dump(exported,args.output)
+        elif args.command == 'matrix':
+            from .safety import matrix_plan
+            dump(matrix_plan(args.samples),args.output)
+        elif args.command == 'injections':
+            from .safety import injection_report
+            dump(injection_report(records(args.runs)),args.output)
+        elif args.command == 'promotion':
+            from .promotion import promotion_review
+            value=promotion_review(read_json(args.report),read_json(args.injections),read_json(args.shadow))
+            dump(value,args.output)
+            return 0 if value['status']=='ready_for_human_review' else 1
         elif args.command == 'shadow':
             dump(shadow_report(records(args.events),args.day),args.output)
         elif args.command == 'compare':

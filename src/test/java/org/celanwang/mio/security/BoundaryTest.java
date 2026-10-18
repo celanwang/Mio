@@ -45,6 +45,11 @@ class BoundaryTest {
         assertThatThrownBy(() -> guard.verifyMcpRegistration(toolkit, Set.of("query-order"), 1, "remote"))
                 .isInstanceOf(IllegalStateException.class);
         guard.verifyMcpRegistration(toolkit, Set.of(), 1, "remote");
+        var unsafe = mock(io.agentscope.core.tool.AgentTool.class);
+        when(unsafe.getName()).thenReturn("unsafe");
+        toolkit.registerAgentTool(unsafe);
+        assertThatThrownBy(() -> guard.verifyMcpRegistration(toolkit, Set.of("query-order"), 1, "remote"))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("ToolBase");
     }
 
     @Test void killSwitchRevokesActiveRulesAndAudits() {

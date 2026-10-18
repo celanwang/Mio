@@ -15,6 +15,7 @@
     <description>Mio</description>
     <properties>
         <java.version>17</java.version>
+        <eval.excluded-groups>model-evaluation</eval.excluded-groups>
     </properties>
     <dependencies>
         <dependency>
@@ -65,10 +66,27 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>${eval.excluded-groups}</excludedGroups>
+                    <failIfNoTests>true</failIfNoTests>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>model-eval</id>
+            <properties>
+                <eval.excluded-groups>disabled</eval.excluded-groups>
+            </properties>
+        </profile>
+    </profiles>
 
 </project>

@@ -10,7 +10,7 @@ def shadow_report(rows, day=None):
     counts = Counter()
     policies, results = {}, {}
     approvals = {}
-    seen = set()
+    seen = {}
     daily = defaultdict(Counter)
     for row in rows:
         # Accept pg events rows, or exported TraceStore events enriched with sessionId.
@@ -25,9 +25,11 @@ def shadow_report(rows, day=None):
         identity = row.get('id')
         if identity:
             if identity in seen:
+                if seen[identity] != row:
+                    raise ValueError('duplicate event ID has conflicting content')
                 counts['duplicate_events'] += 1
                 continue
-            seen.add(identity)
+            seen[identity] = row
         kind = row.get('type')
         daily[local_day]['events'] += 1
         if kind not in ('policy_decision','tool_result','confirm'):
@@ -60,6 +62,8 @@ def shadow_report(rows, day=None):
     pairs=[]
     for key, policy in policies.items():
         effect, state = policy.get('effect'), policy.get('state')
+        effect = effect.upper() if isinstance(effect,str) else effect
+        state = state.upper() if isinstance(state,str) else state
         comparable_pair = effect in ('ALLOW','ASK','DENY') and state in ('ASKING','ALLOWED','SUBMITTED','FINISHED')
         divergent = None
         if comparable_pair:
@@ -70,7 +74,7 @@ def shadow_report(rows, day=None):
         else:
             counts['uncomparable_policy_snapshots'] += 1
         result = results.get(key)
-        executed = bool(result and result.get('state') == 'SUCCESS')
+        executed = bool(result and str(result.get('state')).upper() == 'SUCCESS')
         refusal_violation = executed and approvals.get(key) is False
         executed_after_refusal += refusal_violation
         pairs.append(dict(session_id=key[0],call_id=key[1],tool=policy['tool'],effect=effect,snapshot_state=state,
