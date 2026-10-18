@@ -104,6 +104,18 @@ class ScenarioIntegrationTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(doubles = {Double.NaN, Double.POSITIVE_INFINITY, 1.01, -0.01})
+    void malformedJevProbabilitiesCannotAutoApprove(double probability) {
+        var jev = mock(JevClient.class);
+        when(jev.systemOne(any())).thenReturn(Mono.just(new SystemOneResult("mock",
+                Map.of("consistent", new NoulAnswer(probability)), null)));
+        try (var h = new AgentHarness(jev)) {
+            h.add("auto-bind-coupons", false); h.call("auto-bind-coupons", Map.of()); h.say("done");
+            assertThat(h.start().getPendingConfirmations()).hasSize(1);
+            assertThat(h.world.actions).isEmpty();
+        }
+    }
+
     @Test void realRideAdaptersUseMockServiceAndRequireSeparateCreateConfirmation() throws Exception {
         try (var h = new AgentHarness()) {
             var service = mock(TencentRideService.class);

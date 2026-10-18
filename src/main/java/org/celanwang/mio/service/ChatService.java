@@ -47,7 +47,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -67,7 +66,7 @@ public class ChatService {
     private final MioLongTermMemory longTermMemory;
     private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
-    private final Set<String> runningSessions = ConcurrentHashMap.newKeySet();
+    private final Map<String, Object> runningSessions = new ConcurrentHashMap<>();
     /** Jev 判定结果（toolCallId → 是否通过），供误拦信号比对；有界 LRU 防泄漏。 */
     private final Map<String, Boolean> jevVerdicts = boundedMap(500);
 
@@ -111,7 +110,8 @@ public class ChatService {
                 ? request.getSessionId() : UUID.randomUUID().toString();
         RuntimeContext context = RuntimeContext.builder().sessionId(sessionId).build();
         return Mono.defer(() -> {
-            if (!runningSessions.add(sessionId)) {
+            Object requestOwner = new Object();
+            if (runningSessions.putIfAbsent(sessionId, requestOwner) != null) {
                 return Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, "当前对话正在处理，请稍候。"));
             }
             return Mono.defer(() -> {
@@ -154,7 +154,12 @@ public class ChatService {
                             }
                             return response(sessionId, text, pendingCalls(context));
                         });
-            }).doFinally(signal -> runningSessions.remove(sessionId));
+            })
+                    // Mono 的值可先于 doFinally 被下游观察到；先释放，允许立即提交本轮确认。
+                    // 带 owner 的条件删除避免旧请求的 finally 清理掉下一轮已获取的锁。
+                    .doOnSuccess(ignored -> runningSessions.remove(sessionId, requestOwner))
+                    .doOnError(ignored -> runningSessions.remove(sessionId, requestOwner))
+                    .doFinally(signal -> runningSessions.remove(sessionId, requestOwner));
         });
     }
 
@@ -232,7 +237,8 @@ public class ChatService {
             Answer answer = result.answers().get("consistent");
             double probability = answer instanceof NoulAnswer noul && noul.noul() != null
                     ? noul.noul() : 0.0;
-            boolean pass = probability >= jevThreshold;
+            boolean pass = Double.isFinite(probability) && probability >= 0.0 && probability <= 1.0
+                    && probability >= jevThreshold;
             jevVerdicts.put(call.getId(), pass);
             log.info("Jev 审核 {}：概率 {}，阈值 {}", call.getName(), probability, jevThreshold);
             traceStore.append(sessionId, "jev", "jev", "Jev 审核 " + call.getName() + "（" + jevModel + "）",
@@ -271,7 +277,7 @@ public class ChatService {
                         toJson(Map.of("schemaVersion", 1, "callId", call.getId(),
                                 "tool", call.getName(), "effect", decision.effect(),
                                 "source", decision.source(), "reason", decision.reason(),
-                                "state", call.getState())));
+                                "state", call.getState().name())));
             }
         }
     }
@@ -321,7 +327,7 @@ public class ChatService {
                     traceStore.append(sessionId, "tool:" + result.getName(), "tool_result",
                             "工具返回 " + result.getName() + "（" + result.getState() + "）",
                             toJson(Map.of("schemaVersion", 1, "callId", result.getId(),
-                                    "tool", result.getName(), "state", result.getState(),
+                                    "tool", result.getName(), "state", result.getState().name(),
                                     "output", truncate(outputText(result), 2000))));
                 }
             }
