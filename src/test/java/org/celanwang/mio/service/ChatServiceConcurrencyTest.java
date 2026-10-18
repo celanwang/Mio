@@ -36,7 +36,7 @@ class ChatServiceConcurrencyTest {
         var agent = mock(ReActAgent.class);
         var pending = Sinks.<Msg>one();
         AtomicInteger calls = new AtomicInteger();
-        when(agent.call(anyList(), any())).thenAnswer(inv -> calls.incrementAndGet()==2 ? pending.asMono() : Mono.just(reply()));
+        when(agent.call(anyList(), any(io.agentscope.core.agent.RuntimeContext.class))).thenAnswer(inv -> calls.incrementAndGet()==2 ? pending.asMono() : Mono.just(reply()));
         var service = service(agent);
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicBoolean completed = new AtomicBoolean();
@@ -56,14 +56,14 @@ class ChatServiceConcurrencyTest {
 
     @Test void cancellationAndErrorsReleaseOnlyTheirOwnRequest() {
         var agent = mock(ReActAgent.class);
-        when(agent.call(anyList(), any())).thenReturn(Mono.never());
+        when(agent.call(anyList(), any(io.agentscope.core.agent.RuntimeContext.class))).thenReturn(Mono.never());
         var service = service(agent);
         var request = service.chat(request()).subscribe();
         assertThatThrownBy(() -> service.chat(request()).block(Duration.ofSeconds(2))).hasMessageContaining("409");
         request.dispose();
-        when(agent.call(anyList(), any())).thenReturn(Mono.error(new IllegalStateException("offline")));
+        when(agent.call(anyList(), any(io.agentscope.core.agent.RuntimeContext.class))).thenReturn(Mono.error(new IllegalStateException("offline")));
         assertThatThrownBy(() -> service.chat(request()).block(Duration.ofSeconds(2))).hasMessageContaining("offline");
-        when(agent.call(anyList(), any())).thenReturn(Mono.just(reply()));
+        when(agent.call(anyList(), any(io.agentscope.core.agent.RuntimeContext.class))).thenReturn(Mono.just(reply()));
         assertThat(service.chat(request()).block(Duration.ofSeconds(2))).isNotNull();
     }
 }
