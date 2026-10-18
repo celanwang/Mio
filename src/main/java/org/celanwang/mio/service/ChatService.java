@@ -179,7 +179,7 @@ public class ChatService {
             habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null || policyEngine.isCircuitOpen()
-                    || pending.stream().anyMatch(call -> !ToolPolicies.JEV_REVIEWABLE.contains(call.getName()))) {
+                    || pending.stream().anyMatch(call -> !ToolPolicies.isJevReviewable(call.getName(), call.getInput()))) {
                 if (!pending.isEmpty()) {
                     traceStore.append(sessionId, "human", "ask", "等待人工确认",
                             "待确认操作：" + pending.stream().map(ToolUseBlock::getName).toList());

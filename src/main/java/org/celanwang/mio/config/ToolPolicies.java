@@ -1,6 +1,7 @@
 package org.celanwang.mio.config;
 
 import java.util.Set;
+import java.util.Map;
 
 /**
  * 工具权限分层：只读工具自动放行；写操作按可逆性分轨——不可逆操作（支付/下单/对外发布）
@@ -40,6 +41,12 @@ public final class ToolPolicies {
     /** 允许习惯检测生成自动化提议的白名单工具（非白名单工具永不提议）。 */
     public static final Set<String> AUTOMATABLE = Set.of(
             "auto-bind-coupons", "draw-lottery", "query-my-coupons", "query-promotions");
+
+    /** 打车取消有独立的费用确认，不能被通用工具名的 Jev 自动审核覆盖。 */
+    public static boolean isJevReviewable(String toolName, Map<String, Object> input) {
+        return JEV_REVIEWABLE.contains(toolName)
+                && !("tencent_ride".equals(toolName) && "cancel-order".equals(input.get("command")));
+    }
 
     private ToolPolicies() {
     }

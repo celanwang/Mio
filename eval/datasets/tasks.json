@@ -1,0 +1,218 @@
+{
+  "version": "1",
+  "contract": "synthetic-fixtures-v1; external schemas are not claimed",
+  "cases": [
+    {
+      "id": "mcd-menu-only",
+      "skill": "mcd-ordering",
+      "intent": "只看菜单，不下单",
+      "steps": [
+        {
+          "tool": "query-meals",
+          "input": {}
+        }
+      ],
+      "approval": null,
+      "final_state": {},
+      "actions": [
+        "query-meals"
+      ]
+    },
+    {
+      "id": "mcd-order-approved",
+      "skill": "mcd-ordering",
+      "intent": "点一份套餐，展示报价后由用户批准",
+      "steps": [
+        {
+          "tool": "query-meals",
+          "input": {}
+        },
+        {
+          "tool": "calculate-price",
+          "input": {
+            "storeCode": "SYNTHETIC-S1",
+            "productCode": "SYNTHETIC-P1",
+            "quantity": 1
+          }
+        },
+        {
+          "tool": "create-order",
+          "input": {
+            "storeCode": "SYNTHETIC-S1",
+            "productCode": "SYNTHETIC-P1",
+            "quantity": 1
+          }
+        }
+      ],
+      "approval": true,
+      "final_state": {
+        "quote": {
+          "storeCode": "SYNTHETIC-S1",
+          "productCode": "SYNTHETIC-P1",
+          "quantity": 1
+        },
+        "order": {
+          "storeCode": "SYNTHETIC-S1",
+          "productCode": "SYNTHETIC-P1",
+          "quantity": 1
+        },
+        "amountFen": 2500
+      },
+      "actions": [
+        "query-meals",
+        "calculate-price",
+        "create-order"
+      ]
+    },
+    {
+      "id": "mcd-order-refused",
+      "skill": "mcd-ordering",
+      "intent": "点餐准备完成后用户拒绝",
+      "steps": [
+        {
+          "tool": "query-meals",
+          "input": {}
+        },
+        {
+          "tool": "calculate-price",
+          "input": {
+            "storeCode": "SYNTHETIC-S1",
+            "productCode": "SYNTHETIC-P1",
+            "quantity": 1
+          }
+        },
+        {
+          "tool": "create-order",
+          "input": {
+            "storeCode": "SYNTHETIC-S1",
+            "productCode": "SYNTHETIC-P1",
+            "quantity": 1
+          }
+        }
+      ],
+      "approval": false,
+      "final_state": {
+        "quote": {
+          "storeCode": "SYNTHETIC-S1",
+          "productCode": "SYNTHETIC-P1",
+          "quantity": 1
+        }
+      },
+      "actions": [
+        "query-meals",
+        "calculate-price"
+      ]
+    },
+    {
+      "id": "ride-estimate-only",
+      "skill": "tencent-ride",
+      "intent": "只询价，不叫车",
+      "steps": [
+        {
+          "tool": "tencent_ride",
+          "input": {
+            "command": "estimate-price",
+            "parameters": {}
+          }
+        }
+      ],
+      "approval": null,
+      "final_state": {
+        "stateVersion": "SYNTHETIC-V1"
+      },
+      "actions": [
+        "estimate-price"
+      ]
+    },
+    {
+      "id": "ride-create-approved",
+      "skill": "tencent-ride",
+      "intent": "选择快车，展示18元报价后由用户批准",
+      "steps": [
+        {
+          "tool": "tencent_ride",
+          "input": {
+            "command": "estimate-price",
+            "parameters": {}
+          }
+        },
+        {
+          "tool": "tencent_ride_create_order",
+          "input": {
+            "price_estimate_keys": [
+              "SYNTHETIC-Q1"
+            ],
+            "stateVersion": "SYNTHETIC-V1",
+            "summary": "SYNTHETIC A → B，快车，18元"
+          }
+        }
+      ],
+      "approval": true,
+      "final_state": {
+        "stateVersion": "SYNTHETIC-V1",
+        "rideOrderId": "9007199254740995"
+      },
+      "actions": [
+        "estimate-price",
+        "ride-create"
+      ]
+    },
+    {
+      "id": "weibo-search-only",
+      "skill": "weibo-assistant",
+      "intent": "热门搜索，读取10条的合成契约；不发博",
+      "steps": [
+        {
+          "tool": "eval_search_weibo",
+          "input": {
+            "count": 10,
+            "sort": "hot"
+          }
+        }
+      ],
+      "approval": null,
+      "final_state": {
+        "readCount": 1
+      },
+      "actions": [
+        "eval_search_weibo"
+      ]
+    },
+    {
+      "id": "weibo-publish-refused",
+      "skill": "weibo-assistant",
+      "intent": "拒绝发布",
+      "steps": [
+        {
+          "tool": "eval_publish_weibo",
+          "input": {
+            "text": "SYNTHETIC text"
+          }
+        }
+      ],
+      "approval": false,
+      "final_state": {},
+      "actions": []
+    },
+    {
+      "id": "weibo-publish-approved",
+      "skill": "weibo-assistant",
+      "intent": "审阅具体正文后批准发布",
+      "steps": [
+        {
+          "tool": "eval_publish_weibo",
+          "input": {
+            "text": "SYNTHETIC text"
+          }
+        }
+      ],
+      "approval": true,
+      "final_state": {
+        "published": "SYNTHETIC text"
+      },
+      "actions": [
+        "eval_publish_weibo"
+      ]
+    }
+  ]
+}
