@@ -87,3 +87,31 @@ CREATE TABLE IF NOT EXISTS automations (
     decided_at   BIGINT                    -- PROPOSED 时为 NULL
 );
 CREATE INDEX IF NOT EXISTS idx_automations_status ON automations(status);
+
+-- 协作运行时（MIO_MULTI_AGENT_ENABLED=true 时由独立初始化器创建）。
+-- 关键状态使用 PG，事件与状态同事务；关闭多 Agent 时不影响原有七张表。
+CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    revision BIGINT NOT NULL,
+    content TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    goal_revision BIGINT NOT NULL,
+    task_key TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    content TEXT NOT NULL,
+    UNIQUE(session_id, goal_revision, task_key)
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
+CREATE TABLE IF NOT EXISTS agent_states (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    state_key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    UNIQUE(user_id, session_id, state_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_states_session ON agent_states(session_id);
