@@ -66,6 +66,7 @@ public class ChatService {
     private final MioLongTermMemory longTermMemory;
     private final HabitDetector habitDetector;
     private final ObjectMapper objectMapper;
+    private final ChatExecutionOptions execution;
     private final Map<String, Object> runningSessions = new ConcurrentHashMap<>();
     /** Jev 判定结果（toolCallId → 是否通过），供误拦信号比对；有界 LRU 防泄漏。 */
     private final Map<String, Boolean> jevVerdicts = boundedMap(500);
@@ -79,6 +80,7 @@ public class ChatService {
         });
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ChatService(ReActAgent agent,
                        WeiboMcpService weibo,
                        ObjectProvider<JevClient> jevClient,
@@ -91,6 +93,15 @@ public class ChatService {
                        MioLongTermMemory longTermMemory,
                        HabitDetector habitDetector,
                        ObjectMapper objectMapper) {
+        this(agent,weibo,jevClient,jevThreshold,modelName,jevModel,traceStore,trustStore,policyEngine,longTermMemory,
+                habitDetector,objectMapper,ChatExecutionOptions.USER_CONVERSATION);
+    }
+
+    public ChatService(ReActAgent agent, WeiboMcpService weibo, ObjectProvider<JevClient> jevClient,
+                       double jevThreshold,String modelName,String jevModel,TraceStore traceStore,TrustStore trustStore,
+                       PolicyEngine policyEngine,MioLongTermMemory longTermMemory,HabitDetector habitDetector,
+                       ObjectMapper objectMapper,ChatExecutionOptions execution) {
+        this.execution=execution;
         this.agent = agent;
         this.weibo = weibo;
         this.jevClient = jevClient.getIfAvailable();
@@ -175,7 +186,7 @@ public class ChatService {
             traceNewMessages(sessionId, context, before, effectiveModel);
             auditPolicyDecisions(sessionId, context, before);
             recordLongTermMemory(context, sessionId);
-            habitDetector.detectAsync();
+            if (execution.recordMemory()) habitDetector.detectAsync();
             List<ToolUseBlock> pending = pendingCalls(context);
             if (pending.isEmpty() || jevClient == null || policyEngine.isCircuitOpen()
                     || pending.stream().anyMatch(call -> !ToolPolicies.isJevReviewable(call.getName(), call.getInput()))) {
@@ -215,6 +226,7 @@ public class ChatService {
      * 本项目按请求自定义 sessionId，框架回调拿不到消息，故在此用当前会话上下文手动触发（异步、fail-open）。
      */
     private void recordLongTermMemory(RuntimeContext context, String sessionId) {
+        if (!execution.recordMemory()) return;
         AgentState state = agent.getAgentState(context);
         if (state != null) {
             longTermMemory.record(state.getContext(), sessionId).subscribe();
@@ -222,8 +234,9 @@ public class ChatService {
     }
 
     private Mono<Boolean> judgeWithJev(ToolUseBlock call, RuntimeContext context, String sessionId) {
+        execution.beforeReview().run();
         Map<String, Object> state = Map.of(
-                "用户需求", userIntent(context),
+                "用户需求", execution.trustedIntent() == null ? userIntent(context) : execution.trustedIntent(),
                 "待执行操作", call.getName(),
                 "操作参数", call.getInput() == null ? Map.of() : call.getInput());
         SystemOneRequest request = SystemOneRequest.builder()
@@ -452,7 +465,7 @@ public class ChatService {
             var tool = agent.getToolkit().getTool(call.getName());
             String description = tool == null ? call.getName() : tool.getDescription();
             return new ToolConfirmation(call.getId(), call.getName(), description, call.getInput(),
-                    !trustStore.hasRecords(call.getName()));
+                    !trustStore.hasRecords(call.getName()), org.celanwang.mio.security.ToolContract.hash(tool));
         }).toList();
         String reply = StringUtils.hasText(text) ? text
                 : pending.isEmpty() ? "本次处理已结束。" : "需要你确认以下操作后，助手才能继续。";

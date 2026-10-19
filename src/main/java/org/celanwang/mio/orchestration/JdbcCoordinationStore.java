@@ -60,10 +60,19 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     @Override public void saveTask(TaskRecord expected, TaskRecord next, String type) {
         if(!expected.id().equals(next.id())||next.revision()!=expected.revision()+1)throw new IllegalArgumentException("任务版本不连续");
         transaction.executeWithoutResult(tx->{
-            int changed=jdbc.update("UPDATE tasks SET revision = ?, content = ? WHERE id = ? AND revision = ?",
-                    next.revision(),encode(next),next.id(),expected.revision());
+            int changed=jdbc.update("UPDATE tasks SET revision = ?, content = ?, goal_revision = ? WHERE id = ? AND revision = ?",
+                    next.revision(),encode(next),next.goalRevision(),next.id(),expected.revision());
             if(changed!=1)throw new IllegalStateException("任务已被取消或修改");
             event(next.sessionId(),type,next.id()+":"+next.revision(),next);
+        });
+    }
+    @Override public void startOperation(TaskRecord expected, OperationRecord operation, long now) {
+        transaction.executeWithoutResult(tx->{
+            Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
+            if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
+            if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.effectStarted()))
+                throw new IllegalStateException("同领域已有未核查提交，禁止重复操作");
+            saveTask(expected,expected.withOperation(operation,now),"operation_started");
         });
     }
     private void event(String session, String type, String id, Object value) {

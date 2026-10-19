@@ -55,4 +55,12 @@ class ContractsTest {
         assertThatThrownBy(()->wrapper.stream(List.of(new UserMessage("again")),null,null).blockLast()).isInstanceOf(RunBudget.BudgetExceeded.class);
         verify(model,times(1)).stream(anyList(),any(),any());
     }
+    @Test void nestedApprovalParametersRemainIdenticalToTheSignedInput(){
+        var nested=new ArrayList<Object>(List.of(new LinkedHashMap<>(Map.of("count",1))));
+        var input=new LinkedHashMap<String,Object>();input.put("items",nested);
+        var approval=new PendingApproval("a","c","tool","desc",input,JsonFingerprint.hash(input),"contract",1000,null);
+        nested.clear();input.clear();
+        assertThat(JsonFingerprint.hash(approval.input())).isEqualTo(approval.inputHash());
+        assertThatThrownBy(()->((Map<String,Object>)((List<?>)approval.input().get("items")).get(0)).put("count",2)).isInstanceOf(UnsupportedOperationException.class);
+    }
 }

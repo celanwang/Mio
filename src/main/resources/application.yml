@@ -9,6 +9,16 @@ spring:
       request-timeout: 180s
 
 app:
+  multi-agent:
+    # 受控预览：关闭时沿用原入口；开启后协作关键状态要求 PostgreSQL 可用。
+    enabled: ${MIO_MULTI_AGENT_ENABLED:false}
+    max-tasks: ${MIO_MULTI_AGENT_MAX_TASKS:16}
+    max-model-calls: ${MIO_MULTI_AGENT_MAX_MODEL_CALLS:40}
+    max-tool-calls: ${MIO_MULTI_AGENT_MAX_TOOL_CALLS:80}
+    max-task-calls: ${MIO_MULTI_AGENT_MAX_TASK_CALLS:12}
+    max-tokens: ${MIO_MULTI_AGENT_MAX_TOKENS:80000}
+    max-context-characters: ${MIO_MULTI_AGENT_MAX_CONTEXT_CHARACTERS:100000}
+    timeout-ms: ${MIO_MULTI_AGENT_TIMEOUT_MS:150000}
   mcp:
     mcd:
       # 是否启用麦当劳 MCP；在运行配置中设置 MCD_MCP_ENABLED=true。

@@ -12,8 +12,8 @@ public final class BudgetedModel implements Model {
     public BudgetedModel(Model delegate, RunBudget budget) { this.delegate=delegate;this.budget=budget; }
     @Override public Flux<ChatResponse> stream(List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
         return Flux.defer(() -> {
-            int chars=messages.stream().mapToInt(m -> m.toString().length()).sum();
-            if (tools != null) chars+=tools.toString().length();
+            int chars=io.agentscope.core.util.JsonUtils.getJsonCodec().toJson(messages).length();
+            if (tools != null) chars+=io.agentscope.core.util.JsonUtils.getJsonCodec().toJson(tools).length();
             budget.model(chars);
             return delegate.stream(messages,tools,options).collectList().flatMapMany(chunks -> {
                 Long used=null;

@@ -32,6 +32,7 @@ public class WeiboMcpService {
     private McpClientWrapper client;
     private int toolCount;
     private String error;
+    private volatile java.util.List<io.agentscope.core.tool.ToolBase> businessTools = java.util.List.of();
     private final Map<String, WeiboAction> conversationActions = new ConcurrentHashMap<>();
 
     @Autowired
@@ -99,9 +100,17 @@ public class WeiboMcpService {
             var tools = candidate.listTools().block(Duration.ofSeconds(40));
             if (tools == null || tools.isEmpty()) throw new IllegalStateException("微博没有返回可用工具。");
             // 注册守卫：同名静默覆盖即连接失败（防工具遮蔽），不静默注册。
+            Toolkit staging = new Toolkit();
+            staging.registerMcpClient(candidate).block(Duration.ofSeconds(40));
+            registrationGuard.verifyMcpRegistration(staging, java.util.Set.of(), tools.size(), "weibo-mcp");
             var before = registrationGuard.snapshot(toolkit);
+            for (String name : staging.getToolNames()) {
+                if (before.contains(name)) throw new IllegalStateException("微博工具与已注册工具冲突：" + name);
+            }
             toolkit.registerMcpClient(candidate).block(Duration.ofSeconds(40));
             registrationGuard.verifyMcpRegistration(toolkit, before, tools.size(), "weibo-mcp");
+            businessTools = staging.getToolNames().stream()
+                    .map(name -> (io.agentscope.core.tool.ToolBase) staging.getTool(name)).toList();
             client = candidate;
             toolCount = tools.size();
             error = null;
@@ -113,6 +122,8 @@ public class WeiboMcpService {
         }
     }
 
+    public java.util.List<io.agentscope.core.tool.ToolBase> businessTools() { return businessTools; }
+
     public synchronized Status status() {
         return new Status(properties.isEnabled(), oauth.isAuthorized(), client != null, toolCount, error);
     }
@@ -123,6 +134,7 @@ public class WeiboMcpService {
             toolkit.removeMcpClient("weibo-mcp").block(Duration.ofSeconds(10));
             client = null;
         }
+        businessTools = java.util.List.of();
         toolCount = 0;
     }
 

@@ -29,12 +29,15 @@ public class ChatController {
     @Resource
     private ChatService chatService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private org.celanwang.mio.orchestration.MultiAgentChatService multiAgentChatService;
+
 
     @PostMapping(value = "/chat", produces = MediaType.APPLICATION_JSON_VALUE)
     // 允许 IDEA 的本地预览页面访问聊天接口。
     @CrossOrigin(origins = {"http://localhost:63342", "http://127.0.0.1:63342"})
     public Mono<ChatResponse> chat(@RequestBody ChatRequest request) {
-        return chatService.chat(request);
+        return multiAgentChatService == null ? chatService.chat(request) : multiAgentChatService.chat(request);
     }
 
 

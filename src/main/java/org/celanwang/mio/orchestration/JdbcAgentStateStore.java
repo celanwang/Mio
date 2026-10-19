@@ -33,8 +33,15 @@ public final class JdbcAgentStateStore implements AgentStateStore {
         try{
             var node=json.readTree(rows.get(0));
             if(!kind.equals(node.path("kind").asText()))throw new IllegalStateException("会话状态类型不匹配");
+            if(!node.path("values").isArray()||("state".equals(kind)&&node.path("values").size()!=1))
+                throw new IllegalStateException("会话状态封装损坏");
             List<T> values=new ArrayList<>();
-            for(var value:node.path("values"))values.add(JsonUtils.getJsonCodec().fromJson(value.asText(),type));
+            for(var value:node.path("values")){
+                if(!value.isTextual())throw new IllegalStateException("会话状态内容损坏");
+                T decoded=JsonUtils.getJsonCodec().fromJson(value.asText(),type);
+                if(decoded==null)throw new IllegalStateException("会话状态为空");
+                values.add(decoded);
+            }
             return values;
         }catch(Exception e){throw new IllegalStateException("会话状态读取失败，不能安全恢复",e);}
     }
