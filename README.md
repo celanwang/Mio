@@ -149,3 +149,9 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 运行 `./scripts/eval.sh` 执行完全离线的权限/记忆/习惯测试、三场景 mock 任务、注入四因子对照和指标自检。无需 `.env`、PG、模型 key 或真实业务工具；报告见 `target/evaluation/summary.md`，原始观察与诊断保存在本地 `target/evaluation/`。
 
 [评测实现与运行说明](docs/evaluation/README.md) 对齐飞书《Iris - Evaluation Design》revision 26，涵盖黄金种子集、pass³、阈值校准、影子/回归、显式模型采样和晋升评审。固定剧本基线不等于模型资格；缺模型/人工标签/线上证据时门禁保持未就绪，不自动切换 enforce。
+
+## Multi-Agent 受控预览
+
+设置 `MIO_MULTI_AGENT_ENABLED=true` 后，主助手通过能力注册表向独立领域 Agent 委派任务；新增领域使用 `DomainDefinition`，任务运行时没有固定品牌流程。默认关闭。当前接通主从调用、领域工具和技能隔离、补问恢复、任务级审批、PG 检查点与提交前记录，页面可分别处理各项任务。没有结构化供应商回执的写操作保持待核查，不自动重试。
+
+[运行与验证说明](docs/multi-agent/README.md) 列出入口、离线回归、真实 PostgreSQL 测试及阶段边界。后台事件调度、局部重规划、跨轮预算和真实模型资格评测仍待后续阶段，当前预览用于单进程运行。
