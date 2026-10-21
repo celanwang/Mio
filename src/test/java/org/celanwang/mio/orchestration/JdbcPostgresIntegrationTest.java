@@ -104,4 +104,24 @@ class JdbcPostgresIntegrationTest {
         assertThatThrownBy(()->store.startOperation(consumer,new OperationRecord("consumer-op","c","write","h",5,"SUBMITTING",""),5)).isInstanceOf(TaskFacts.InputUnavailable.class);
         assertThat(store.task(consumer.id()).orElseThrow().effectStarted()).isFalse();
     }
+    @Test void scopedAnswerAndAuditCommitTogetherAndOnlyOneConcurrentAnswerWins()throws Exception{
+        var initial=task("q");store.createTask(initial);var question=initial.next(TaskStatus.NEEDS_INPUT,"地点？",List.of(),false,1);store.saveTask(initial,question,"task_updated");
+        var goal=store.goal("root").orElseThrow();var first=question.answered(goal,question.questionId(),"上海",2);
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_answer CHECK(type <> 'task_answer_received')");
+        assertThatThrownBy(()->store.saveTask(question,first,"task_answer_received")).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(store.task(question.id()).orElseThrow()).isEqualTo(question);
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_answer");
+        var second=question.answered(goal,question.questionId(),"北京",2);var wins=new AtomicInteger();var pool=Executors.newFixedThreadPool(2);var barrier=new CyclicBarrier(2);
+        try{
+            var jobs=List.of(first,second).stream().map(answer->pool.submit(()->{
+                barrier.await(5,TimeUnit.SECONDS);
+                try{store.saveTask(question,answer,"task_answer_received");wins.incrementAndGet();}catch(IllegalStateException conflict){assertThat(conflict).hasMessageContaining("修改");}
+                return true;
+            })).toList();for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        var reloaded=new JdbcCoordinationStore(jdbc,jdbc.getDataSource(),new ObjectMapper()).task(question.id()).orElseThrow();
+        assertThat(wins.get()).isEqualTo(1);assertThat(reloaded.status()).isEqualTo(TaskStatus.INPUT_READY);assertThat(reloaded.answers()).hasSize(1);
+        assertThat(store.goal("root").orElseThrow()).isEqualTo(goal);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='task_answer_received'",Integer.class)).isEqualTo(1);
+    }
 }

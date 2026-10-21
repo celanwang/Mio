@@ -32,7 +32,8 @@ public final class TaskRuntime {
         if(existing.isEmpty()){
             var goal=new GoalRecord(UUID.randomUUID().toString(),session,1,text,text,clock.millis(),clock.millis());store.createGoal(goal);return goal;
         }
-        var next=existing.get().appendUser(text,clock.millis());store.saveGoal(existing.get(),next);
+        var questions=list(session).stream().filter(t->t.status()==TaskStatus.NEEDS_INPUT).toList();
+        var next=existing.get().appendUser(text,clock.millis(),questions.size()==1?questions.get(0).id():null);store.saveGoal(existing.get(),next);
         // Conservative first release: any new user message invalidates pending approvals; no stale request may be restored.
         for(var task:store.tasks(session))if(task.status()==TaskStatus.AWAITING_APPROVAL){
             store.saveTask(task,task.next(TaskStatus.STALE,"用户信息已更新，请按新信息重新准备并确认",List.of(),task.effectStarted(),clock.millis()),"approval_invalidated");
@@ -53,7 +54,7 @@ public final class TaskRuntime {
         try{changed=!registry.require(task.spec().capabilityId()).version().equals(task.capabilityVersion());}
         catch(IllegalArgumentException unavailable){changed=true;}
         boolean expired=task.status()==TaskStatus.AWAITING_APPROVAL&&task.approvals().stream().anyMatch(a->a.expiresAt()<=clock.millis());
-        boolean goalChanged=(task.status()==TaskStatus.AWAITING_APPROVAL||task.status()==TaskStatus.WAITING_DEPENDENCY)
+        boolean goalChanged=(task.status()==TaskStatus.AWAITING_APPROVAL||task.status()==TaskStatus.WAITING_DEPENDENCY||task.status()==TaskStatus.INPUT_READY)
                 &&store.goal(task.sessionId()).orElseThrow().revision()!=task.goalRevision();
         if(!changed&&!expired&&!goalChanged)return task;
         var stale=task.next(TaskStatus.STALE,changed?"领域技能版本已变更，请重新准备任务":goalChanged?"用户目标已改变，请重新准备":"本次确认已过期，请重新准备",List.of(),task.effectStarted(),clock.millis());
@@ -105,10 +106,22 @@ public final class TaskRuntime {
                 if(task.goalRevision()!=goal.revision())throw new IllegalStateException("任务依赖已过期");
                 return runWhenReady(task,goal,budget);
             }
+            if(task.status()==TaskStatus.INPUT_READY){
+                return execute(task,goal,new TaskWorker.Input(false,task.answers().get(task.answers().size()-1).text(),List.of()),budget,Map.of());
+            }
             if(task.status()!=TaskStatus.NEEDS_INPUT)throw new IllegalStateException("当前任务不等待用户输入");
             if(task.goalRevision()==goal.revision())throw new IllegalStateException("缺少新的用户回答");
-            var rebased=task.atGoal(goal,clock.millis());store.saveTask(task,rebased,"task_input_received");
-            return execute(rebased,goal,new TaskWorker.Input(false,goal.latestUserInput(),List.of()),budget,Map.of());
+            if(!task.id().equals(goal.inputTaskId()))throw new IllegalStateException("收到消息时存在多个任务或回答归属不明，请选择具体任务的问题");
+            return answerTask(session,id,task.questionId(),goal.latestUserInput(),budget);
+        });
+    }
+    public Mono<TaskRecord> answerTask(String session,String id,String questionId,String text,RunBudget budget){
+        return Mono.defer(()->{
+            var task=require(session,id);var goal=goal(session);
+            var ready=task.answered(goal,questionId,text,clock.millis());
+            TaskFacts.bind(store,ready,clock.millis());
+            store.saveTask(task,ready,"task_answer_received");
+            return execute(ready,goal,new TaskWorker.Input(false,text,List.of()),budget,Map.of());
         });
     }
     private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved){

@@ -37,6 +37,8 @@ public class ChatController {
     // 允许 IDEA 的本地预览页面访问聊天接口。
     @CrossOrigin(origins = {"http://localhost:63342", "http://127.0.0.1:63342"})
     public Mono<ChatResponse> chat(@RequestBody ChatRequest request) {
+        if(multiAgentChatService==null&&(request.getTaskReply()!=null||request.getResumeTaskId()!=null))
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,"当前入口未启用任务回答，请刷新服务状态"));
         return multiAgentChatService == null ? chatService.chat(request) : multiAgentChatService.chat(request);
     }
 

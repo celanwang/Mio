@@ -13,6 +13,10 @@ public class ChatRequest {
 
     // 前端只提交工具调用编号和决定，工具名及参数由后端的会话状态提供。
     private List<Confirmation> confirmations;
+    private TaskReply taskReply;
+    private String resumeTaskId;
+
+    public record TaskReply(String taskId,String questionId) {}
 
     public record Confirmation(String toolCallId, Boolean approved) {
     }

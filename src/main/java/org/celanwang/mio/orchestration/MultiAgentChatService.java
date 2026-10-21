@@ -30,15 +30,32 @@ public final class MultiAgentChatService {
             var budget=new RunBudget(limits,clock);
             Mono<ChatResponse> result=Mono.defer(()->{
                 boolean decisions=request.getConfirmations()!=null&&!request.getConfirmations().isEmpty();
-                if(decisions&&request.getMessage()!=null&&!request.getMessage().isBlank())throw new IllegalArgumentException("批准和新消息应分别提交");
+                boolean taskReply=request.getTaskReply()!=null;
+                boolean resume=request.getResumeTaskId()!=null;
+                if((decisions?1:0)+(taskReply?1:0)+(resume?1:0)>1)throw new IllegalArgumentException("任务回答、恢复和批准应分别提交");
+                if((decisions||resume)&&request.getMessage()!=null&&!request.getMessage().isBlank())throw new IllegalArgumentException("控制操作和新消息应分别提交");
                 Mono<?> prepare;
                 if(decisions)prepare=runtime.approve(session,request.getConfirmations(),budget);
+                else if(resume){
+                    String id=request.getResumeTaskId();
+                    if(id.isBlank()||id.length()>200)throw new IllegalArgumentException("任务编号无效");
+                    if(runtime.require(session,id).status()!=TaskStatus.INPUT_READY)throw new IllegalStateException("当前任务没有等待恢复的已接收回答");
+                    prepare=runtime.continueTask(session,id,budget);
+                }
+                else if(taskReply){
+                    var target=request.getTaskReply();
+                    if(target.taskId()==null||target.taskId().isBlank()||target.taskId().length()>200||target.questionId()==null)
+                        throw new IllegalArgumentException("缺少任务或问题编号");
+                    prepare=runtime.answerTask(session,target.taskId(),target.questionId(),request.getMessage(),budget);
+                }
                 else{
                     runtime.captureUser(session,request.getMessage());
                     traces.append(session,"user","user","用户消息",request.getMessage());prepare=Mono.empty();
                 }
                 return prepare.then(Mono.defer(()->Mono.using(()->{
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
+                    if(taskReply)data="用户已回答任务 "+request.getTaskReply().taskId()+" 的问题，服务端已恢复该任务。请读取 list_tasks 汇报；回答仅属于这个任务，不能传播为其他任务的新增授权或全局偏好。";
+                    if(resume)data="用户要求继续已持久接收回答的任务，服务端已按原回答恢复。请读取 list_tasks 准确汇报，不添加或重复任何业务批准。";
                     if(profiles!=null){
                         var global=profiles.pages().stream().filter(p->p.scope().equals("global")).limit(20).toList();
                         String text=profiles.render(global);
@@ -46,13 +63,13 @@ public final class MultiAgentChatService {
                     }
                     return factory.create(session,budget,data);
                 },agent->{
-                    List<Msg> messages=decisions?List.of():List.of(new UserMessage(request.getMessage()));
+                    List<Msg> messages=decisions||taskReply||resume?List.of():List.of(new UserMessage(request.getMessage()));
                     RuntimeContext context=RuntimeContext.builder().sessionId(session+":supervisor").build();
                     return agent.call(messages,context).map(reply->{
                         String text=reply.getTextContent();
                         traces.append(session,"supervisor","model","主助手回复",text==null?"":text);
                         // Only the real top-level user/assistant conversation is eligible for distillation.
-                        if(memory!=null&&!decisions){
+                        if(memory!=null&&!decisions&&!taskReply&&!resume){
                             var state=agent.getAgentState(context);if(state!=null)memory.record(state.getContext(),session).subscribe();
                         }
                         return response(session,text);

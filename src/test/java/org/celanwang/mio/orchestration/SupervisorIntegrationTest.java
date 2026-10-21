@@ -60,4 +60,32 @@ class SupervisorIntegrationTest {
         f.runtime.cancel("root",second.id());assertThat(f.runtime.require("root",second.id()).status()).isEqualTo(TaskStatus.CANCELLED);
         assertThatThrownBy(()->f.runtime.continueTask("root",second.id(),f.budget).block()).isInstanceOf(IllegalStateException.class);
     }
+    @Test void scopedReplyUsesServerBrokerWithoutCreatingAGlobalUserMessageOrMemory()throws Exception{
+        var f=new DomainFixture();f.call("mio_request_input",Map.of("text","城市？"));var task=f.runtime.submit("root",f.spec("q",TaskScope.PREPARE),f.budget).block();
+        f.call("mio_finish_task",Map.of("text","按上海处理完成"));var script=new Script();script.tool("list_tasks",Map.of());script.say("已收到本任务回答");
+        var registry=new AgentRegistry(List.of(new AgentCapability("arbitrary-domain","领域","d","s","1",List.of())));
+        var service=new MultiAgentChatService(new SupervisorFactory(script.model,f.states,registry,f.runtime,new ObjectMapper()),f.runtime,registry,
+                new RunBudget.Limits(50,100,30,100000,100000,120000),Clock.systemUTC(),new TraceStore((s,e)->{}),f.memory,null);
+        var request=request("上海");request.setTaskReply(new ChatRequest.TaskReply(task.id(),task.questionId()));
+        var before=f.runtime.goal("root");var response=service.chat(request).block(Duration.ofSeconds(10));
+        assertThat(response.getTasks().get(0).status()).isEqualTo(TaskStatus.COMPLETED);assertThat(f.runtime.goal("root")).isEqualTo(before);
+        assertThat(f.states.get(null,"root:supervisor","agent_state",io.agentscope.core.state.AgentState.class).orElseThrow().getContext().stream()
+                .filter(m->m.getRole()==MsgRole.USER).map(Msg::getTextContent)).doesNotContain("上海");
+        verifyNoInteractions(f.memory);
+    }
+    @Test void scopedReplyAndApprovalCannotBeCombined(){
+        var f=new DomainFixture();var request=request("answer");request.setTaskReply(new ChatRequest.TaskReply("task","question"));
+        request.setConfirmations(List.of(new ChatRequest.Confirmation("approval",true)));
+        assertThatThrownBy(()->service(f,new Script()).chat(request).block()).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThat(f.modelCalls.get()).isZero();
+    }
+    @Test void publicResumeConsumesOnlyThePersistedAnswerAndCannotResumeOtherStates(){
+        var f=new DomainFixture();f.call("mio_request_input",Map.of("text","城市？"));var task=f.runtime.submit("root",f.spec("q",TaskScope.PREPARE),f.budget).block();
+        var ready=task.answered(f.runtime.goal("root"),task.questionId(),"上海",1);f.store.saveTask(task,ready,"task_answer_received");
+        f.call("mio_finish_task",Map.of("text","done"));var script=new Script();script.say("已恢复");
+        var request=request(null);request.setResumeTaskId(task.id());var service=service(f,script);var before=f.runtime.goal("root");
+        assertThat(service.chat(request).block(Duration.ofSeconds(10)).getTasks().get(0).status()).isEqualTo(TaskStatus.COMPLETED);
+        assertThat(f.runtime.goal("root")).isEqualTo(before);
+        assertThatThrownBy(()->service.chat(request).block()).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    }
 }
