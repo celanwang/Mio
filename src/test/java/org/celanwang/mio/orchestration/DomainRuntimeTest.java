@@ -9,6 +9,21 @@ import static org.mockito.Mockito.*;
 
 class DomainRuntimeTest {
     private static final Duration TIMEOUT=Duration.ofSeconds(10);
+    @Test void actualApprovalAndWorkerLoopUseTrustedReceiptAdapterToResolveBusinessOutcome(){
+        OperationVerifier adapter=new OperationVerifier(){
+            public boolean supports(String name){return name.equals("create-order");}
+            public Verification verify(String raw){return new Verification(raw.equals("synthetic-receipt")?OperationOutcome.CONFIRMED_APPLIED:OperationOutcome.UNKNOWN,"synthetic-order","fixture-adapter");}
+        };
+        var f=new DomainFixture(List.of(adapter));f.call("create-order",Map.of());
+        var task=f.runtime.submit("root",f.spec("verified",TaskScope.REQUEST_APPROVAL),f.budget).block(TIMEOUT);
+        f.call("mio_finish_task",Map.of("text","创建已核实"));
+        var result=f.runtime.approve("root",List.of(new ChatRequest.Confirmation(task.approvals().get(0).id(),true)),f.budget).block(TIMEOUT).get(0);
+        assertThat(result.operations()).as(result.reply()).hasSize(1);
+        assertThat(result.operations().get(0).receipts()).as(result.reply()).hasSize(1);
+        assertThat(result.operations().get(0).outcome()).as(result.operations().toString()).isEqualTo(OperationOutcome.CONFIRMED_APPLIED);
+        assertThat(result.status()).isEqualTo(TaskStatus.COMPLETED);assertThat(result.unresolvedEffects()).isFalse();
+        assertThat(result.operations().get(0).receipts()).hasSize(1);assertThat(f.writes.get()).isEqualTo(1);
+    }
     @Test void realWorkerQueriesAndReturnsWhileKeepingDelegationOutOfUserMemory(){
         var f=new DomainFixture();f.call("query-meals",Map.of());f.call("mio_finish_task",Map.of("text","已查到菜单"));
         var record=f.runtime.submit("root",f.spec("menu",TaskScope.PREPARE),f.budget).block(TIMEOUT);

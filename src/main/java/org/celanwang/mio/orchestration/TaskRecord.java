@@ -21,6 +21,14 @@ public record TaskRecord(String id, String sessionId, String goalId, long goalRe
     }
     public TaskRecord next(TaskStatus state,String text,List<PendingApproval> pending,boolean effect,org.celanwang.mio.model.vo.WeiboAction action,long now) {
         if (status.terminal()) throw new IllegalStateException("任务已结束，不能重新执行");
+        boolean allowed=switch(status){
+            case WAITING_DEPENDENCY -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
+            case NEEDS_INPUT -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
+            case AWAITING_APPROVAL -> state==TaskStatus.AWAITING_APPROVAL||state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
+            case RUNNING -> state!=TaskStatus.WAITING_DEPENDENCY&&state!=TaskStatus.STALE;
+            default -> false;
+        };
+        if(!allowed)throw new IllegalStateException("非法任务状态迁移："+status+" -> "+state);
         if (effectStarted && !effect) throw new IllegalArgumentException("不能抹去已提交的操作");
         return new TaskRecord(id,sessionId,goalId,goalRevision,spec,childSessionId,capabilityVersion,state,text,action,pending,
                 effect,operations,revision+1,createdAt,now);
@@ -30,6 +38,16 @@ public record TaskRecord(String id, String sessionId, String goalId, long goalRe
         var updated=new java.util.ArrayList<>(operations);
         updated.removeIf(o->o.id().equals(operation.id()));updated.add(operation);
         return new TaskRecord(id,sessionId,goalId,goalRevision,spec,childSessionId,capabilityVersion,status,reply,action,approvals,true,updated,revision+1,createdAt,now);
+    }
+    public boolean unresolvedEffects(){
+        return effectStarted&&(operations.isEmpty()||operations.stream().anyMatch(o->o.outcome()==OperationOutcome.UNKNOWN));
+    }
+    public TaskRecord withReceipt(String operationId,OperationReceipt receipt,long now){
+        var old=operations.stream().filter(o->o.id().equals(operationId)).findFirst().orElseThrow(()->new IllegalArgumentException("操作不存在"));
+        var updated=old.received(receipt);if(updated==old)return this;
+        var entries=operations.stream().map(o->o.id().equals(operationId)?updated:o).toList();
+        return new TaskRecord(id,sessionId,goalId,goalRevision,spec,childSessionId,capabilityVersion,status,reply,action,approvals,
+                effectStarted,entries,revision+1,createdAt,now);
     }
     public TaskRecord atGoal(GoalRecord goal,long now) {
         if(status!=TaskStatus.NEEDS_INPUT || effectStarted)throw new IllegalStateException("任务不能自动变更目标版本");

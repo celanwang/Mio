@@ -70,4 +70,26 @@ class JdbcPostgresIntegrationTest {
         assertThat(new JdbcAgentStateStore(jdbc,new ObjectMapper()).get(null,"child","agent_state",AgentState.class).orElseThrow().getContext().get(0).getTextContent())
                 .isEqualTo("user-input");
     }
+    @Test void concurrentLateReceiptsAreNotLostAndAuditFailureRollsThemBack()throws Exception{
+        var task=task("a");store.createTask(task);
+        var op=new OperationRecord("op","c","write","hash",1,"SUBMITTING","");store.startOperation(task,op,1);
+        var current=store.task("a").orElseThrow();store.saveTask(current,current.next(TaskStatus.UNKNOWN,"cancelled",List.of(),true,2),"task_cancelled");
+        var receipt=new OperationReceipt("r1","test-adapter","SUCCESS","raw",OperationOutcome.CONFIRMED_APPLIED,"provider-order",3);
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_receipt CHECK(type <> 'operation_receipt')");
+        assertThatThrownBy(()->store.recordReceipt("a","op",receipt,3)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(store.task("a").orElseThrow().operations().get(0).receipts()).isEmpty();
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_receipt");
+        var second=new OperationReceipt("r2","test-adapter","SUCCESS","other raw",OperationOutcome.CONFIRMED_APPLIED,"provider-order",4);
+        var pool=Executors.newFixedThreadPool(2);var barrier=new CyclicBarrier(2);
+        try{
+            var jobs=List.of(receipt,second).stream().map(r->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);store.recordReceipt("a","op",r,4);return true;})).toList();
+            for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        var updated=store.task("a").orElseThrow();assertThat(updated.status()).isEqualTo(TaskStatus.UNKNOWN);
+        assertThat(updated.operations().get(0).receipts()).hasSize(2);assertThat(updated.unresolvedEffects()).isFalse();
+        long revision=updated.revision();store.recordReceipt("a","op",receipt,5);
+        assertThat(store.task("a").orElseThrow().revision()).isEqualTo(revision);
+        store.startOperation(createSecond(),new OperationRecord("other","other","write","h",5,"SUBMITTING",""),5);
+    }
+    private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
 }

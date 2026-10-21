@@ -40,10 +40,10 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
             boolean read=readOnly(delegate,call.getInput());
             String operation=read?null:execution.beforeEffect(call.getToolUseBlock(),ToolContract.hash(this));
             return delegate.callAsync(call).doOnNext(result->{
-                if(operation!=null)execution.effectReturned(operation,output(result));
+                if(operation!=null)execution.effectReturned(operation,output(result),result.getState().name());
             });
         });
     }
     private String output(ToolResultBlock block){return block.getOutput()==null?"":block.getOutput().stream()
-            .filter(b->b instanceof TextBlock).map(b->((TextBlock)b).getText()).reduce("",(a,b)->a+"\n"+b);}
+            .filter(b->b instanceof TextBlock).map(b->((TextBlock)b).getText()).collect(java.util.stream.Collectors.joining("\n"));}
 }

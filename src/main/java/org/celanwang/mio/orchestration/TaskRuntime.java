@@ -16,9 +16,14 @@ public final class TaskRuntime {
     private final PolicyEngine policy;
     private final Clock clock;
     private final int maxTasks;
+    private final List<OperationVerifier> verifiers;
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
+        this(store,registry,worker,policy,clock,maxTasks,List.of());
+    }
+    public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers){
         this.store=store;this.registry=registry;this.worker=worker;this.policy=policy;this.clock=clock;this.maxTasks=maxTasks;
+        this.verifiers=List.copyOf(verifiers);
     }
     public GoalRecord captureUser(String session,String text){
         if(session==null||session.isBlank()||session.length()>200||text==null||text.isBlank()||text.length()>10000)
@@ -71,7 +76,7 @@ public final class TaskRuntime {
                 var parent=require(session,dependency);
                 if(!parent.goalId().equals(goal.id())||parent.goalRevision()!=goal.revision())throw new IllegalArgumentException("依赖不属于当前目标版本");
             }
-            if(spec.scope()==TaskScope.REQUEST_APPROVAL&&existing.stream().anyMatch(t->t.spec().capabilityId().equals(spec.capabilityId())&&t.effectStarted()))
+            if(spec.scope()==TaskScope.REQUEST_APPROVAL&&existing.stream().anyMatch(t->t.spec().capabilityId().equals(spec.capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域存在结果不明的提交，请先核查，不创建新的写任务");
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
                     capability.version(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());store.createTask(task);
@@ -115,7 +120,7 @@ public final class TaskRuntime {
                 if(current.revision()!=task.revision()||current.status().terminal())throw new IllegalStateException("任务已改变");
                 var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
                 store.saveTask(current,running,"task_running");
-                var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved);
+                var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers);
                 return worker.run(running,goal,input,execution).map(result->finish(running.id(),result))
                         .onErrorResume(error->{
                             var latest=store.task(task.id()).orElseThrow();
@@ -134,9 +139,12 @@ public final class TaskRuntime {
         List<PendingApproval> pending=new ArrayList<>();
         for(ToolConfirmation call:result.pending())pending.add(new PendingApproval(UUID.randomUUID().toString(),call.toolCallId(),call.name(),
                 call.description(),call.input(),JsonFingerprint.hash(call.input()),call.contractHash(),clock.millis()+300_000,null));
-        TaskStatus status=current.effectStarted()?TaskStatus.UNKNOWN:result.failed()?TaskStatus.FAILED:!pending.isEmpty()?TaskStatus.AWAITING_APPROVAL:
+        boolean cannotResume=current.effectStarted()&&(!pending.isEmpty()||result.needsInput());
+        if(cannotResume)pending.clear();
+        TaskStatus status=current.unresolvedEffects()?TaskStatus.UNKNOWN:result.failed()||cannotResume?TaskStatus.FAILED:!pending.isEmpty()?TaskStatus.AWAITING_APPROVAL:
                 result.needsInput()?TaskStatus.NEEDS_INPUT:TaskStatus.COMPLETED;
-        String reply=current.effectStarted()?"工具调用已返回，业务副作用仍需按回执核查。\n"+result.reply():result.reply();
+        String reply=current.unresolvedEffects()?"工具调用已返回，业务副作用仍需按回执核查。\n"+result.reply():result.reply();
+        if(cannotResume)reply="本任务已经发出操作，后续步骤需另建任务，不能恢复或重复提交。\n"+reply;
         var next=current.next(status,reply,pending,current.effectStarted(),result.action(),clock.millis());
         store.saveTask(current,next,"task_updated");return next;
     }

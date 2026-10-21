@@ -6,8 +6,10 @@ public record TaskSummary(String id,String key,String agent,String objective,Tas
     public static TaskSummary of(TaskRecord task,AgentRegistry registry){
         String name;
         try{name=registry.require(task.spec().capabilityId()).name();}catch(IllegalArgumentException removed){name=task.spec().capabilityId();}
+        String reply=task.status()==TaskStatus.UNKNOWN&&!task.unresolvedEffects()
+                ?"执行已中断，业务结果已通过回执核实；请查看操作记录，不重跑本任务。":task.reply();
         return new TaskSummary(task.id(),task.spec().key(),name,task.spec().objective(),
-                task.status(),task.reply(),task.goalRevision(),task.effectStarted(),
+                task.status(),reply,task.goalRevision(),task.unresolvedEffects(),
                 (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations());
     }
 }

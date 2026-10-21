@@ -13,4 +13,5 @@ public interface CoordinationStore {
     void saveTask(TaskRecord expected, TaskRecord next, String event);
     /** Fence competing submissions and persist the operation before contacting a provider. */
     void startOperation(TaskRecord expected, OperationRecord operation, long now);
+    void recordReceipt(String taskId,String operationId,OperationReceipt receipt,long now);
 }

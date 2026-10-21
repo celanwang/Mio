@@ -264,7 +264,8 @@ function renderTasks() {
   const labels = { WAITING_DEPENDENCY:'等待前置任务',RUNNING:'处理中',NEEDS_INPUT:'等待补充信息',AWAITING_APPROVAL:'等待你确认',COMPLETED:'本轮已结束',FAILED:'未完成',UNKNOWN:'提交结果待核查',CANCELLED:'已停止',STALE:'信息已变更，需重新准备' };
   for (const task of tasks) {
     const card = el('div','task-card'), heading = el('div','task-heading');
-    heading.append(el('strong','',task.agent),el('span','',labels[task.status] || '状态待核对')); card.append(heading,el('p','',task.objective));
+    const statusLabel = task.status === 'UNKNOWN' && task.verificationRequired === false ? '执行中断，业务结果已核实' : labels[task.status] || '状态待核对';
+    heading.append(el('strong','',task.agent),el('span','',statusLabel)); card.append(heading,el('p','',task.objective));
     if (task.reply) card.append(el('p','',task.reply));
     if (['WAITING_DEPENDENCY','RUNNING','NEEDS_INPUT','AWAITING_APPROVAL'].includes(task.status)) {
       const actions = el('div','task-actions'), stop = el('button','','停止此任务'); stop.type = 'button'; stop.disabled = busy; stop.onclick = () => cancelTask(task.id); actions.append(stop); card.append(actions);

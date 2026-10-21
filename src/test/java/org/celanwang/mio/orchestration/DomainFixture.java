@@ -32,6 +32,9 @@ final class DomainFixture {
     final TaskRuntime runtime;
     final RunBudget budget=new RunBudget(new RunBudget.Limits(50,100,30,100000,100000,120000),Clock.systemUTC());
     DomainFixture(){
+        this(List.of());
+    }
+    DomainFixture(List<OperationVerifier> verifiers){
         when(model.getModelName()).thenReturn("fake-domain");
         when(model.stream(anyList(),any(),any())).thenAnswer(inv->Flux.defer(()->{
             modelCalls.incrementAndGet();inputs.add(List.copyOf(inv.getArgument(0)));
@@ -44,7 +47,7 @@ final class DomainFixture {
         var definition=new DomainDefinition(capability,"测试领域",()->List.of(tool("query-meals",true,reads),tool("create-order",false,writes)));
         var factory=new DomainAgentFactory(List.of(definition),c->model,states,null,policy,mock(WeiboMcpService.class),jev,.8,
                 new TraceStore((s,e)->{}),mock(TrustStore.class),memory,mock(HabitDetector.class),profiles,new ObjectMapper());
-        runtime=new TaskRuntime(store,new AgentRegistry(List.of(capability)),factory,policy,Clock.systemUTC(),16);
+        runtime=new TaskRuntime(store,new AgentRegistry(List.of(capability)),factory,policy,Clock.systemUTC(),16,verifiers);
         runtime.captureUser("root","只按我的明确需求执行，写操作逐次确认");
     }
     private ToolBase tool(String name,boolean read,AtomicInteger counter){

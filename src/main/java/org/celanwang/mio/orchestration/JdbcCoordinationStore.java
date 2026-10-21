@@ -70,9 +70,16 @@ public final class JdbcCoordinationStore implements CoordinationStore {
         transaction.executeWithoutResult(tx->{
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
             if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
-            if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.effectStarted()))
+            if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域已有未核查提交，禁止重复操作");
             saveTask(expected,expected.withOperation(operation,now),"operation_started");
+        });
+    }
+    @Override public void recordReceipt(String taskId,String operationId,OperationReceipt receipt,long now){
+        transaction.executeWithoutResult(tx->{
+            var current=jdbc.queryForObject("SELECT content FROM tasks WHERE id = ? FOR UPDATE",(rs,n)->decode(rs.getString(1),TaskRecord.class),taskId);
+            var next=current.withReceipt(operationId,receipt,now);
+            if(next!=current)saveTask(current,next,"operation_receipt");
         });
     }
     private void event(String session, String type, String id, Object value) {

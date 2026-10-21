@@ -15,10 +15,16 @@ public final class TaskExecution {
     private final Clock clock;
     public record ApprovalGrant(String fingerprint,long expiresAt) {}
     private final Map<String,ApprovalGrant> approved;
+    private final List<OperationVerifier> verifiers;
     private volatile String question, finalAnswer;
     public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
                          Clock clock,Map<String,ApprovalGrant> approved){
+        this(store,task,goal,budget,policy,clock,approved,List.of());
+    }
+    public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
+                         Clock clock,Map<String,ApprovalGrant> approved,List<OperationVerifier> verifiers){
         this.store=store;taskId=task.id();this.goal=goal;this.budget=budget;this.policy=policy;this.clock=clock;this.approved=Map.copyOf(approved);
+        this.verifiers=List.copyOf(verifiers);
     }
     public RunBudget budget(){return budget;}
     public String question(){return question;}
@@ -55,13 +61,20 @@ public final class TaskExecution {
         var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","");
         store.startOperation(task,operation,clock.millis());return id;
     }
-    public synchronized void effectReturned(String id,String output){
+    public synchronized void effectReturned(String id,String output){effectReturned(id,output,"SUCCESS");}
+    public synchronized void effectReturned(String id,String output,String frameworkState){
         var task=store.task(taskId).orElseThrow();
-        // Cancellation may have won while an external request was in flight. UNKNOWN already preserves that uncertainty.
-        if(task.status()!=TaskStatus.RUNNING)return;
         var old=task.operations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow();
-        var returned=new OperationRecord(id,old.callId(),old.tool(),old.inputHash(),old.startedAt(),"UNCONFIRMED",
-                output==null?"":output.substring(0,Math.min(output.length(),16000)));
-        store.saveTask(task,task.withOperation(returned,clock.millis()),"operation_returned");
+        String raw=output==null?"":output;
+        var verification=new OperationVerifier.Verification(OperationOutcome.UNKNOWN,"","unverified-tool-receipt");
+        // SDK ToolResultBlock.text uses RUNNING for unspecified state. Only provider evidence can resolve it.
+        if(("SUCCESS".equals(frameworkState)||"RUNNING".equals(frameworkState))&&raw.length()<=128000){
+            var adapter=verifiers.stream().filter(v->v.supports(old.tool())).findFirst();
+            if(adapter.isPresent())verification=adapter.get().verify(raw);
+        }
+        String fingerprint=JsonFingerprint.hash(Map.of("operation",id,"state",frameworkState,"raw",raw));
+        var receipt=new OperationReceipt(fingerprint,verification.source(),frameworkState,raw.substring(0,Math.min(raw.length(),16000)),
+                verification.outcome(),verification.businessId(),clock.millis());
+        store.recordReceipt(taskId,id,receipt,clock.millis());
     }
 }
