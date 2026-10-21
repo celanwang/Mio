@@ -17,7 +17,7 @@ final class OrchestrationTool extends ToolBase {
     }
     private static String description(String name){return switch(name){
         case "discover_agents"->"发现实际注册的领域能力、边界和约束；不能臆造能力。";
-        case "delegate_task"->"按用户目标创建受限任务。key 在目标版本内幂等；PREPARE 仅查询，REQUEST_APPROVAL 写操作仍经业务审批。dependencies 是已存在任务的 id。";
+        case "delegate_task"->"按用户目标创建受限任务。key 在目标版本内幂等；PREPARE 仅查询，REQUEST_APPROVAL 仍经审批。dependencies 是前置任务 id；inputs 用来源任务 facts 中的 factId/version 绑定事实，不能编造事实值。";
         case "list_tasks"->"读取当前会话全部任务的真实进度和结果；结果不明不得声称成功。";
         case "continue_task"->"恢复等待依赖的任务，或使用用户最新原话回答该任务的补问。不能用于批准、重试失败或结果不明的操作。";
         case "cancel_task"->"停止任务的后续步骤；已发出的业务请求仍需核查，不自动撤销订单。";
@@ -28,6 +28,9 @@ final class OrchestrationTool extends ToolBase {
                 "key",Map.of("type","string"),"capabilityId",Map.of("type","string"),"objective",Map.of("type","string"),
                 "constraints",Map.of("type","array","items",Map.of("type","string")),
                 "dependencies",Map.of("type","array","items",Map.of("type","string")),
+                "inputs",Map.of("type","array","maxItems",8,"items",Map.of("type","object","properties",Map.of(
+                        "taskId",Map.of("type","string"),"factId",Map.of("type","string"),"version",Map.of("type","string"),"alias",Map.of("type","string")),
+                        "required",List.of("taskId","factId","version","alias"),"additionalProperties",false)),
                 "scope",Map.of("type","string","enum",List.of("PREPARE","REQUEST_APPROVAL"))),
                 "required",List.of("key","capabilityId","objective"),"additionalProperties",false);
         if(name.equals("continue_task")||name.equals("cancel_task"))return Map.of("type","object","properties",Map.of("taskId",Map.of("type","string")),"required",List.of("taskId"),"additionalProperties",false);

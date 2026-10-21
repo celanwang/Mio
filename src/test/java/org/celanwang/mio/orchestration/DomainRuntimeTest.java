@@ -24,6 +24,20 @@ class DomainRuntimeTest {
         assertThat(result.status()).isEqualTo(TaskStatus.COMPLETED);assertThat(result.unresolvedEffects()).isFalse();
         assertThat(result.operations().get(0).receipts()).hasSize(1);assertThat(f.writes.get()).isEqualTo(1);
     }
+    @Test void actualDomainAgentReceivesVersionedFactBindingsInItsWorkingContext(){
+        var f=new DomainFixture();var goal=f.runtime.goal("root");
+        var parent=new TaskRecord("parent","root",goal.id(),goal.revision(),f.spec("parent",TaskScope.PREPARE),"source-child","1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,0,0);
+        parent=parent.withOperation(new OperationRecord("source-op","c","write","hash",1,"SUBMITTING",""),1)
+                .withReceipt("source-op",new OperationReceipt("trusted-receipt","fixture","SUCCESS","raw",OperationOutcome.CONFIRMED_APPLIED,"synthetic-resource",2),2)
+                .next(TaskStatus.COMPLETED,"prose is not a fact",List.of(),true,3);f.store.createTask(parent);
+        var fact=TaskFacts.of(parent).get(0);
+        f.call("query-meals",Map.of());f.call("mio_finish_task",Map.of("text","done"));
+        var spec=new TaskSpec("consume","arbitrary-domain","处理绑定的资源",null,List.of(parent.id()),TaskScope.PREPARE,
+                List.of(new InputBinding(parent.id(),fact.id(),fact.version(),"resource")));
+        assertThat(f.runtime.submit("root",spec,f.budget).block(TIMEOUT).status()).isEqualTo(TaskStatus.COMPLETED);
+        assertThat(f.inputs.get(0).stream().map(m->m.getTextContent()).reduce("",(a,b)->a+"\n"+b)).contains("synthetic-resource","trusted-receipt",fact.version());
+        verifyNoInteractions(f.memory);
+    }
     @Test void realWorkerQueriesAndReturnsWhileKeepingDelegationOutOfUserMemory(){
         var f=new DomainFixture();f.call("query-meals",Map.of());f.call("mio_finish_task",Map.of("text","已查到菜单"));
         var record=f.runtime.submit("root",f.spec("menu",TaskScope.PREPARE),f.budget).block(TIMEOUT);

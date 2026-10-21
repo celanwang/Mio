@@ -3,7 +3,10 @@ package org.celanwang.mio.orchestration;
 import java.util.List;
 
 public record TaskSpec(String key, String capabilityId, String objective, List<String> constraints,
-                       List<String> dependencies, TaskScope scope) {
+                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs) {
+    public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope){
+        this(key,capabilityId,objective,constraints,dependencies,scope,List.of());
+    }
     public TaskSpec {
         if (key == null || !key.matches("[a-zA-Z0-9_-]{1,80}")) throw new IllegalArgumentException("任务 key 无效");
         if (objective == null || objective.isBlank() || objective.length() > 6000) throw new IllegalArgumentException("任务目标应为 1–6000 字符");
@@ -14,5 +17,8 @@ public record TaskSpec(String key, String capabilityId, String objective, List<S
         if (dependencies.size() > 8 || dependencies.stream().anyMatch(key::equals)
                 || dependencies.stream().distinct().count() != dependencies.size()) throw new IllegalArgumentException("任务依赖无效");
         scope = scope == null ? TaskScope.PREPARE : scope;
+        inputs=inputs==null?List.of():List.copyOf(inputs);
+        if(inputs.size()>8||inputs.stream().map(InputBinding::alias).distinct().count()!=inputs.size())throw new IllegalArgumentException("事实输入过多或别名重复");
+        for(var binding:inputs)if(!dependencies.contains(binding.taskId()))throw new IllegalArgumentException("事实输入必须引用已声明的依赖任务");
     }
 }

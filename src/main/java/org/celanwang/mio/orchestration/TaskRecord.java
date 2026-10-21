@@ -25,7 +25,7 @@ public record TaskRecord(String id, String sessionId, String goalId, long goalRe
             case WAITING_DEPENDENCY -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
             case NEEDS_INPUT -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
             case AWAITING_APPROVAL -> state==TaskStatus.AWAITING_APPROVAL||state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
-            case RUNNING -> state!=TaskStatus.WAITING_DEPENDENCY&&state!=TaskStatus.STALE;
+            case RUNNING -> state!=TaskStatus.WAITING_DEPENDENCY;
             default -> false;
         };
         if(!allowed)throw new IllegalStateException("非法任务状态迁移："+status+" -> "+state);

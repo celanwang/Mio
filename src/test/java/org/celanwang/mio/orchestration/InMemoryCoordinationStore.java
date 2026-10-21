@@ -17,6 +17,7 @@ final class InMemoryCoordinationStore implements CoordinationStore {
     @Override public synchronized void saveTask(TaskRecord old,TaskRecord next,String type){if(!records.replace(old.id(),old,next))throw new IllegalStateException("stale task");events.add(type);}
     @Override public synchronized void startOperation(TaskRecord expected,OperationRecord operation,long now){
         if(goals.get(expected.sessionId()).revision()!=expected.goalRevision())throw new IllegalStateException("stale goal");
+        TaskFacts.bind(this,expected,now);
         if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.unresolvedEffects()))
             throw new IllegalStateException("unverified domain effect");
         saveTask(expected,expected.withOperation(operation,now),"operation_started");

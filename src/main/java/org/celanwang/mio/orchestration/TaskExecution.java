@@ -40,6 +40,7 @@ public final class TaskExecution {
         budget.active();var task=store.task(taskId).orElseThrow();
         if(task.status()!=TaskStatus.RUNNING || task.goalRevision()!=goal.revision()
                 || store.goal(task.sessionId()).orElseThrow().revision()!=goal.revision())throw new IllegalStateException("任务已失效或取消");
+        TaskFacts.bind(store,task,clock.millis());
         return task;
     }
     public boolean humanApproved(ToolUseBlock call,String contractHash){

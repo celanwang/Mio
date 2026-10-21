@@ -121,12 +121,15 @@ public final class TaskRuntime {
                 var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
                 store.saveTask(current,running,"task_running");
                 var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers);
-                return worker.run(running,goal,input,execution).map(result->finish(running.id(),result))
+                return Mono.defer(()->{
+                    var bound=new TaskWorker.Input(input.first(),input.userText(),input.decisions(),TaskFacts.bind(store,running,clock.millis()));
+                    return worker.run(running,goal,bound,execution);
+                }).map(result->finish(running.id(),result))
                         .onErrorResume(error->{
                             var latest=store.task(task.id()).orElseThrow();
                             if(latest.status()!=TaskStatus.RUNNING)return Mono.just(latest);
                             var ended=latest.next(latest.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.FAILED,
-                                    "任务执行中断，请核查状态（"+error.getClass().getSimpleName()+"）",List.of(),latest.effectStarted(),clock.millis());
+                                    error instanceof TaskFacts.InputUnavailable?"任务所需事实不可用："+error.getMessage():"任务执行中断，请核查状态（"+error.getClass().getSimpleName()+"）",List.of(),latest.effectStarted(),clock.millis());
                             store.saveTask(latest,ended,"task_failed");return Mono.just(ended);
                         })
                         .doOnSuccess(v->owners.remove(task.id(),owner)).doOnError(e->owners.remove(task.id(),owner))
@@ -136,6 +139,11 @@ public final class TaskRuntime {
     }
     private TaskRecord finish(String id,TaskWorker.Result result){
         var current=store.task(id).orElseThrow();if(current.status()!=TaskStatus.RUNNING)return current;
+        try{TaskFacts.bind(store,current,clock.millis());}
+        catch(TaskFacts.InputUnavailable changed){
+            var stale=current.next(current.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.STALE,"事实输入已变更，需重新准备任务",List.of(),current.effectStarted(),clock.millis());
+            store.saveTask(current,stale,"task_input_invalidated");return stale;
+        }
         List<PendingApproval> pending=new ArrayList<>();
         for(ToolConfirmation call:result.pending())pending.add(new PendingApproval(UUID.randomUUID().toString(),call.toolCallId(),call.name(),
                 call.description(),call.input(),JsonFingerprint.hash(call.input()),call.contractHash(),clock.millis()+300_000,null));

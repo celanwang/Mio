@@ -92,4 +92,16 @@ class JdbcPostgresIntegrationTest {
         store.startOperation(createSecond(),new OperationRecord("other","other","write","h",5,"SUBMITTING",""),5);
     }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
+    @Test void changedBoundFactIsRejectedInsideTheSubmissionTransaction(){
+        var parent=task("parent");store.createTask(parent);
+        store.startOperation(parent,new OperationRecord("op","c","write","h",1,"SUBMITTING",""),1);
+        store.recordReceipt(parent.id(),"op",new OperationReceipt("r1","trusted-test","SUCCESS","raw",OperationOutcome.CONFIRMED_APPLIED,"resource",2),2);
+        parent=store.task(parent.id()).orElseThrow();var completed=parent.next(TaskStatus.COMPLETED,"done",List.of(),true,3);store.saveTask(parent,completed,"task_updated");
+        var fact=TaskFacts.of(completed).get(0);
+        var spec=new TaskSpec("consumer","domain","consume",null,List.of(parent.id()),TaskScope.REQUEST_APPROVAL,List.of(new InputBinding(parent.id(),fact.id(),fact.version(),"resource")));
+        var consumer=new TaskRecord("consumer","root","g",1,spec,"child","v1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,0,0);store.createTask(consumer);
+        store.recordReceipt(parent.id(),"op",new OperationReceipt("r2","trusted-test","SUCCESS","conflicting",OperationOutcome.CONFIRMED_APPLIED,"different",4),4);
+        assertThatThrownBy(()->store.startOperation(consumer,new OperationRecord("consumer-op","c","write","h",5,"SUBMITTING",""),5)).isInstanceOf(TaskFacts.InputUnavailable.class);
+        assertThat(store.task(consumer.id()).orElseThrow().effectStarted()).isFalse();
+    }
 }
