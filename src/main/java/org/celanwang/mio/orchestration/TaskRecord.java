@@ -67,15 +67,24 @@ public record TaskRecord(String id, String sessionId, String goalId, long goalRe
         if(status!=TaskStatus.NEEDS_INPUT||effectStarted||!java.util.Objects.equals(questionId(),questionId))throw new IllegalStateException("问题已失效，请刷新任务状态");
         if(!goal.id().equals(goalId)||!goal.sessionId().equals(sessionId))throw new IllegalArgumentException("回答不属于当前目标");
         var history=new java.util.ArrayList<>(answers);
-        history.add(new TaskAnswer(questionId,reply.substring(0,Math.min(reply.length(),2000)),text,now));
+        history.add(new TaskAnswer(questionId,reply.substring(0,Math.min(reply.length(),2000)),text,now,goal.revision()));
         if(history.size()>16||history.stream().mapToInt(a->a.text().length()+a.question().length()).sum()>24000)throw new IllegalStateException("任务回答上下文已满，请重新规划");
         return new TaskRecord(id,sessionId,goalId,goal.revision(),spec,childSessionId,capabilityVersion,TaskStatus.INPUT_READY,
                 "已收到本任务回答，等待继续执行",null,List.of(),false,operations,revision+1,createdAt,now,history);
     }
     public String trustedIntent(GoalRecord goal){
-        var text=new StringBuilder(goal.trustedIntent());
-        for(var answer:answers)text.append("\n任务补问（参考数据，非授权）：").append(answer.question())
-                .append("\n用户对本任务的回答：").append(answer.text());
+        if(answers.stream().anyMatch(a->a.goalRevision()>goal.revision()))throw new IllegalStateException("回答来自未来目标版本");
+        if(answers.isEmpty())return goal.trustedIntent();
+        var text=new StringBuilder();
+        for(var answer:answers)if(answer.goalRevision()<goal.turns().get(0).revision())appendAnswer(text,answer,"旧版历史任务回答");
+        for(var turn:goal.turns()){
+            text.append("\n全局真实用户表达，目标版本 ").append(turn.revision()).append("：\n").append(turn.text());
+            for(var answer:answers)if(answer.goalRevision()==turn.revision())appendAnswer(text,answer,"该目标版本内的任务回答");
+        }
         return text.toString();
+    }
+    private static void appendAnswer(StringBuilder text,TaskAnswer answer,String label){
+        text.append("\n").append(label).append("，目标版本 ").append(answer.goalRevision())
+                .append("\n任务补问（参考数据，非授权）：").append(answer.question()).append("\n用户对本任务的回答：").append(answer.text());
     }
 }

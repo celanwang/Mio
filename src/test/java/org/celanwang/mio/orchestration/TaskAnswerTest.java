@@ -75,4 +75,25 @@ class TaskAnswerTest {
         var goalNode=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(f.runtime.goal("root"));goalNode.remove("inputTaskId");
         assertThat(json.treeToValue(goalNode,GoalRecord.class).inputTaskId()).isNull();
     }
+    @Test void oldTaskAnswersDoNotAppearAfterALaterGlobalCorrection(){
+        var f=new DomainFixture();f.call("mio_request_input",Map.of("text","预算？"));var task=f.runtime.submit("root",f.spec("q",TaskScope.PREPARE),f.budget).block();
+        var ready=task.answered(f.runtime.goal("root"),task.questionId(),"旧预算80元",1);
+        var newer=f.runtime.goal("root").appendUser("新预算不得超过50元",2).appendUser("你好",3);
+        var intent=ready.trustedIntent(newer);
+        assertThat(intent.indexOf("旧预算80元")).isLessThan(intent.indexOf("新预算不得超过50元"));
+        assertThat(intent.indexOf("新预算不得超过50元")).isLessThan(intent.indexOf("你好"));
+        assertThat(ready.answers().get(0).goalRevision()).isEqualTo(task.goalRevision());
+    }
+    @Test void currentScopedAnswerFollowsItsGlobalTurnAndLegacySnapshotsAreNotSplitOnUserText()throws Exception{
+        var f=new DomainFixture();f.call("mio_request_input",Map.of("text","预算？"));var task=f.runtime.submit("root",f.spec("q",TaskScope.PREPARE),f.budget).block();
+        var newer=f.runtime.goal("root").appendUser("全局预算50元",2);
+        var ready=task.answered(newer,task.questionId(),"本任务改为60元",3);var text=ready.trustedIntent(newer);
+        assertThat(text.indexOf("全局预算50元")).isLessThan(text.indexOf("本任务改为60元"));
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();var node=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(newer);
+        node.remove("turns");var legacy=json.treeToValue(node,GoalRecord.class);
+        assertThat(legacy.turns()).hasSize(1);assertThat(legacy.turns().get(0).text()).isEqualTo(newer.trustedIntent());
+    }
+    @Test void inconsistentPersistedTimelineIsRejected(){
+        assertThatThrownBy(()->new GoalRecord("g","root",1,"actual-user-text","actual-user-text",0,0,null,List.of(new GoalRecord.UserTurn(1,"altered")))).isInstanceOf(IllegalArgumentException.class);
+    }
 }
