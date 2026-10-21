@@ -70,10 +70,19 @@ public final class TaskExecution {
         var verification=new OperationVerifier.Verification(OperationOutcome.UNKNOWN,"","unverified-tool-receipt");
         // SDK ToolResultBlock.text uses RUNNING for unspecified state. Only provider evidence can resolve it.
         if(("SUCCESS".equals(frameworkState)||"RUNNING".equals(frameworkState))&&raw.length()<=128000){
-            var adapter=verifiers.stream().filter(v->v.supports(old.tool())).findFirst();
-            if(adapter.isPresent())verification=adapter.get().verify(raw);
+            try{
+                var adapter=verifiers.stream().filter(v->v.supports(old.tool())).findFirst();
+                if(adapter.isPresent()){
+                    var checked=adapter.get().verify(raw);
+                    if(checked!=null&&checked.outcome()!=null&&checked.source()!=null&&!checked.source().isBlank()
+                            &&(checked.outcome()==OperationOutcome.UNKNOWN||checked.businessId()!=null&&!checked.businessId().isBlank()))verification=checked;
+                }
+            }catch(RuntimeException failed){
+                verification=new OperationVerifier.Verification(OperationOutcome.UNKNOWN,"","verifier-error");
+            }
         }
-        String fingerprint=JsonFingerprint.hash(Map.of("operation",id,"state",frameworkState,"raw",raw));
+        String fingerprint=JsonFingerprint.hash(Map.of("operation",id,"state",frameworkState,"raw",raw,
+                "verifier",verification.source(),"outcome",verification.outcome().name(),"businessId",verification.businessId()==null?"":verification.businessId()));
         var receipt=new OperationReceipt(fingerprint,verification.source(),frameworkState,raw.substring(0,Math.min(raw.length(),16000)),
                 verification.outcome(),verification.businessId(),clock.millis());
         store.recordReceipt(taskId,id,receipt,clock.millis());

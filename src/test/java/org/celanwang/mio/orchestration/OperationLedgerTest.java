@@ -65,4 +65,23 @@ class OperationLedgerTest {
         var waiting=task("x").next(TaskStatus.NEEDS_INPUT,"ask",List.of(),false,1);
         assertThatThrownBy(()->waiting.next(TaskStatus.COMPLETED,"invented",List.of(),false,2)).isInstanceOf(IllegalStateException.class);
     }
+    @Test void verifierFailureCannotDiscardTheOriginalReceipt(){
+        execution();
+        OperationVerifier broken=new OperationVerifier(){
+            public boolean supports(String name){return true;}
+            public Verification verify(String raw){throw new IllegalStateException("parser failed");}
+        };
+        var lease=new TaskExecution(store,store.task("a").orElseThrow(),goal,
+                new RunBudget(new RunBudget.Limits(5,5,5,10000,10000,10000),Clock.systemUTC()),new PolicyEngine("shadow"),Clock.systemUTC(),Map.of(),List.of(broken));
+        lease.effectReturned("op",RECEIPT);
+        var op=store.task("a").orElseThrow().operations().get(0);
+        assertThat(op.outcome()).isEqualTo(OperationOutcome.UNKNOWN);
+        assertThat(op.receipts()).hasSize(1);assertThat(op.receipts().get(0).output()).isEqualTo(RECEIPT);
+        assertThat(op.receipts().get(0).source()).isEqualTo("verifier-error");
+        var fixed=new TaskExecution(store,store.task("a").orElseThrow(),goal,
+                new RunBudget(new RunBudget.Limits(5,5,5,10000,10000,10000),Clock.systemUTC()),new PolicyEngine("shadow"),Clock.systemUTC(),Map.of(),List.of(new TencentOrderReceiptVerifier()));
+        fixed.effectReturned("op",RECEIPT);
+        var resolved=store.task("a").orElseThrow().operations().get(0);
+        assertThat(resolved.receipts()).hasSize(2);assertThat(resolved.outcome()).isEqualTo(OperationOutcome.CONFIRMED_APPLIED);
+    }
 }
