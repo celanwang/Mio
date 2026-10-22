@@ -19,6 +19,10 @@ app:
     max-tokens: ${MIO_MULTI_AGENT_MAX_TOKENS:80000}
     max-context-characters: ${MIO_MULTI_AGENT_MAX_CONTEXT_CHARACTERS:100000}
     timeout-ms: ${MIO_MULTI_AGENT_TIMEOUT_MS:150000}
+    goal-max-model-calls: ${MIO_MULTI_AGENT_GOAL_MAX_MODEL_CALLS:160}
+    goal-max-tool-calls: ${MIO_MULTI_AGENT_GOAL_MAX_TOOL_CALLS:320}
+    goal-max-task-calls: ${MIO_MULTI_AGENT_GOAL_MAX_TASK_CALLS:48}
+    goal-max-tokens: ${MIO_MULTI_AGENT_GOAL_MAX_TOKENS:320000}
   mcp:
     mcd:
       # 是否启用麦当劳 MCP；在运行配置中设置 MCD_MCP_ENABLED=true。

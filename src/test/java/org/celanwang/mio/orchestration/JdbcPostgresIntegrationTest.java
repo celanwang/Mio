@@ -92,6 +92,48 @@ class JdbcPostgresIntegrationTest {
         store.startOperation(createSecond(),new OperationRecord("other","other","write","h",5,"SUBMITTING",""),5);
     }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
+    private JdbcGoalBudgetStore budgets(){var budgets=new JdbcGoalBudgetStore(jdbc,jdbc.getDataSource(),new ObjectMapper());budgets.initialize();return budgets;}
+    @Test void budgetQuotaSurvivesNewStoreInstancesAndConcurrentReservations()throws Exception{
+        var budgets=budgets();var limits=new GoalBudgetStore.Limits(1,2,2,100);budgets.open("g",limits);
+        var pool=Executors.newFixedThreadPool(2);var barrier=new CyclicBarrier(2);var wins=new AtomicInteger();
+        try{
+            var jobs=java.util.stream.IntStream.range(0,2).mapToObj(i->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);try{budgets.reserve("g",GoalBudgetStore.Kind.MODEL);wins.incrementAndGet();}catch(RunBudget.BudgetExceeded exhausted){}return true;})).toList();
+            for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        var restored=budgets();var snapshot=restored.open("g",new GoalBudgetStore.Limits(999,999,999,999));
+        assertThat(wins.get()).isEqualTo(1);assertThat(snapshot.limits()).isEqualTo(limits);assertThat(snapshot.models()).isEqualTo(1);assertThat(snapshot.pendingUsage()).isEqualTo(1);assertThat(snapshot.usageComplete()).isFalse();
+        assertThatThrownBy(()->restored.reserve("g",GoalBudgetStore.Kind.MODEL)).isInstanceOf(RunBudget.BudgetExceeded.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='budget_reserved'",Integer.class)).isEqualTo(1);
+    }
+    @Test void budgetAuditFailureRollsBackBothReservationAndSettlement(){
+        var budgets=budgets();budgets.open("g",new GoalBudgetStore.Limits(5,5,5,100));
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_budget CHECK(type <> 'budget_reserved')");
+        assertThatThrownBy(()->budgets.reserve("g",GoalBudgetStore.Kind.MODEL)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(budgets.find("g").orElseThrow().models()).isZero();assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM budget_calls",Integer.class)).isZero();
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_budget");String call=budgets.reserve("g",GoalBudgetStore.Kind.MODEL);
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_budget CHECK(type <> 'budget_settled')");
+        assertThatThrownBy(()->budgets.settle("g",call,7L,true)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(budgets.find("g").orElseThrow().pendingUsage()).isEqualTo(1);assertThat(budgets.find("g").orElseThrow().knownTokens()).isZero();
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_budget");budgets.settle("g",call,7L,true);var settled=budgets.find("g").orElseThrow();
+        budgets.settle("g",call,7L,true);assertThat(budgets.find("g").orElseThrow()).isEqualTo(settled);
+        assertThatThrownBy(()->budgets.settle("g",call,9L,true)).isInstanceOf(IllegalStateException.class);
+    }
+    @Test void openingBudgetRequiresAuditAndKeepsLegacyCoverageUnknown(){
+        var budgets=budgets();jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_open CHECK(type <> 'budget_opened')");
+        assertThatThrownBy(()->budgets.open("g",new GoalBudgetStore.Limits(5,5,5,100),true)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(budgets.find("g")).isEmpty();jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_open");
+        budgets.open("g",new GoalBudgetStore.Limits(5,5,5,100),true);String call=budgets.reserve("g",GoalBudgetStore.Kind.MODEL);budgets.settle("g",call,0L,true);
+        assertThat(budgets().find("g").orElseThrow().historyUnknown()).isTrue();assertThat(budgets().find("g").orElseThrow().usageComplete()).isFalse();
+    }
+    @Test void goalBudgetRejectsForeignCallsCorruptStateAndTokenOverrun(){
+        var budgets=budgets();budgets.open("g",new GoalBudgetStore.Limits(5,5,5,5));String call=budgets.reserve("g",GoalBudgetStore.Kind.MODEL);
+        store.createGoal(new GoalRecord("other","other",1,"intent","intent",0,0));budgets.open("other",new GoalBudgetStore.Limits(5,5,5,100));
+        assertThatThrownBy(()->budgets.settle("other",call,7L,true)).isInstanceOf(IllegalArgumentException.class);
+        budgets.settle("g",call,7L,true);assertThat(budgets.find("g").orElseThrow().knownTokens()).isEqualTo(7);
+        assertThatThrownBy(()->budgets.reserve("g",GoalBudgetStore.Kind.TOOL)).isInstanceOf(RunBudget.BudgetExceeded.class);
+        jdbc.update("UPDATE goal_budgets SET content='{}' WHERE goal_id='g'");
+        assertThatThrownBy(()->budgets.reserve("g",GoalBudgetStore.Kind.MODEL)).isInstanceOf(IllegalStateException.class);
+    }
     @Test void changedBoundFactIsRejectedInsideTheSubmissionTransaction(){
         var parent=task("parent");store.createTask(parent);
         store.startOperation(parent,new OperationRecord("op","c","write","h",1,"SUBMITTING",""),1);

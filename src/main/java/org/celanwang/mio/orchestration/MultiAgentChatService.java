@@ -18,10 +18,16 @@ public final class MultiAgentChatService {
     private final SupervisorFactory factory;private final TaskRuntime runtime;private final AgentRegistry registry;
     private final RunBudget.Limits limits;private final Clock clock;private final TraceStore traces;
     private final MioLongTermMemory memory;private final ProfileStore profiles;
+    private final GoalBudgetStore budgetStore;private final GoalBudgetStore.Limits goalLimits;
     private final Map<String,Object> running=new ConcurrentHashMap<>();
     public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
                                  Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles){
+        this(factory,runtime,registry,limits,clock,traces,memory,profiles,null,null);
+    }
+    public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
+                                 Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,GoalBudgetStore budgetStore,GoalBudgetStore.Limits goalLimits){
         this.factory=factory;this.runtime=runtime;this.registry=registry;this.limits=limits;this.clock=clock;this.traces=traces;this.memory=memory;this.profiles=profiles;
+        this.budgetStore=budgetStore;this.goalLimits=goalLimits;
     }
     public Mono<ChatResponse> chat(ChatRequest request){
         return Mono.defer(()->{
@@ -32,6 +38,7 @@ public final class MultiAgentChatService {
                 boolean decisions=request.getConfirmations()!=null&&!request.getConfirmations().isEmpty();
                 boolean taskReply=request.getTaskReply()!=null;
                 boolean resume=request.getResumeTaskId()!=null;
+                boolean existingGoal=runtime.findGoal(session).isPresent();
                 if((decisions?1:0)+(taskReply?1:0)+(resume?1:0)>1)throw new IllegalArgumentException("任务回答、恢复和批准应分别提交");
                 if((decisions||resume)&&request.getMessage()!=null&&!request.getMessage().isBlank())throw new IllegalArgumentException("控制操作和新消息应分别提交");
                 Mono<?> prepare;
@@ -52,6 +59,7 @@ public final class MultiAgentChatService {
                     runtime.captureUser(session,request.getMessage());
                     traces.append(session,"user","user","用户消息",request.getMessage());prepare=Mono.empty();
                 }
+                if(budgetStore!=null)budget.bind(budgetStore,runtime.goal(session).id(),goalLimits,existingGoal);
                 return prepare.then(Mono.defer(()->Mono.using(()->{
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
                     if(taskReply)data="用户已回答任务 "+request.getTaskReply().taskId()+" 的问题，服务端已恢复该任务。请读取 list_tasks 汇报；回答仅属于这个任务，不能传播为其他任务的新增授权或全局偏好。";
@@ -76,6 +84,7 @@ public final class MultiAgentChatService {
                     });
                 },io.agentscope.core.ReActAgent::close)));
             }).timeout(Duration.ofMillis(limits.millis()+1000))
+                    .onErrorMap(RunBudget.BudgetExceeded.class,e->new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,e.getMessage()))
                     .onErrorMap(org.springframework.dao.DataAccessException.class,e->new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"协作存储不可用，已停止新的执行"))
                     .onErrorMap(IllegalArgumentException.class,e->new ResponseStatusException(HttpStatus.BAD_REQUEST,e.getMessage()))
                     .onErrorMap(IllegalStateException.class,e->new ResponseStatusException(HttpStatus.CONFLICT,e.getMessage()));
@@ -87,6 +96,7 @@ public final class MultiAgentChatService {
         for(var task:tasks)if(task.status()==TaskStatus.AWAITING_APPROVAL)for(var a:task.approvals())if(a.decision()==null&&a.expiresAt()>clock.millis())
             calls.add(new ToolConfirmation(a.id(),a.tool(),a.description(),a.input(),true,a.contractHash(),task.id(),registry.require(task.spec().capabilityId()).name()));
         WeiboAction action=tasks.stream().filter(t->t.status()==TaskStatus.NEEDS_INPUT&&t.action()!=null).map(TaskRecord::action).findFirst().orElse(null);
-        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(t->TaskSummary.of(t,registry)).toList(),true);
+        var budget=budgetStore==null?null:runtime.findGoal(session).flatMap(g->budgetStore.find(g.id())).orElse(null);
+        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(t->TaskSummary.of(t,registry)).toList(),true,budget);
     }
 }

@@ -41,6 +41,7 @@ public final class TaskRuntime {
         return next;
     }
     public GoalRecord goal(String session){return store.goal(session).orElseThrow(()->new IllegalArgumentException("目标不存在"));}
+    public Optional<GoalRecord> findGoal(String session){return store.goal(session);}
     public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).toList();}
     private TaskRecord recoverInterrupted(TaskRecord task){
         if(task.status()!=TaskStatus.RUNNING||owners.containsKey(task.id()))return task;
@@ -125,10 +126,13 @@ public final class TaskRuntime {
         });
     }
     private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved){
+        return execute(task,goal,input,budget,approved,false);
+    }
+    private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved,boolean reserved){
         return Mono.defer(()->{
             Object owner=new Object();if(owners.putIfAbsent(task.id(),owner)!=null)throw new IllegalStateException("任务正在执行");
             try{
-                budget.task();
+                if(!reserved)budget.task();
                 var current=store.task(task.id()).orElseThrow();
                 if(current.revision()!=task.revision()||current.status().terminal())throw new IllegalStateException("任务已改变");
                 var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
@@ -187,12 +191,18 @@ public final class TaskRuntime {
                 var task=require(session,entry.getKey());
                 List<PendingApproval> updated=task.approvals().stream().map(a->entry.getValue().stream().filter(c->c.toolCallId().equals(a.id()))
                         .findFirst().map(c->a.decide(c.approved())).orElse(a)).toList();
+                if(updated.stream().allMatch(a->Boolean.FALSE.equals(a.decision()))){
+                    var rejected=task.next(TaskStatus.CANCELLED,"已拒绝本任务的操作，未继续执行",updated,false,clock.millis());
+                    store.saveTask(task,rejected,"approval_rejected");return Mono.just(rejected);
+                }
+                boolean complete=updated.stream().noneMatch(a->a.decision()==null);
+                if(complete)budget.task();
                 var saved=task.next(TaskStatus.AWAITING_APPROVAL,task.reply(),updated,false,clock.millis());store.saveTask(task,saved,"approval_recorded");
-                if(updated.stream().anyMatch(a->a.decision()==null))return Mono.just(saved);
+                if(!complete)return Mono.just(saved);
                 var calls=updated.stream().map(a->new ChatRequest.Confirmation(a.callId(),a.decision())).toList();
                 var approved=new HashMap<String,TaskExecution.ApprovalGrant>();updated.stream().filter(a->Boolean.TRUE.equals(a.decision()))
                         .forEach(a->approved.put(a.callId(),new TaskExecution.ApprovalGrant(a.inputHash()+"|"+a.contractHash(),a.expiresAt())));
-                return execute(saved,goal(session),new TaskWorker.Input(false,"",calls),budget,approved);
+                return execute(saved,goal(session),new TaskWorker.Input(false,"",calls),budget,approved,true);
             }).collectList();
         });
     }

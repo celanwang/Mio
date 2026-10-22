@@ -59,8 +59,9 @@ public class MultiAgentConfig {
     @Bean AgentRegistry agentRegistry(List<DomainDefinition> definitions){return new AgentRegistry(definitions.stream().map(DomainDefinition::capability).toList());}
     @Bean JdbcCoordinationStore coordinationStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcCoordinationStore(jdbc,source,json);}
     @Bean JdbcAgentStateStore coordinationAgentStateStore(JdbcTemplate jdbc,ObjectMapper json){return new JdbcAgentStateStore(jdbc,json);}
+    @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
-    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states){return args->{store.initialize();states.initialize();};}
+    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets){return args->{store.initialize();states.initialize();budgets.initialize();};}
     @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> definitions,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
@@ -79,8 +80,10 @@ public class MultiAgentConfig {
             @Value("${app.multi-agent.max-model-calls:40}")int models,@Value("${app.multi-agent.max-tool-calls:80}")int tools,
             @Value("${app.multi-agent.max-task-calls:12}")int tasks,@Value("${app.multi-agent.max-tokens:80000}")long tokens,
             @Value("${app.multi-agent.max-context-characters:100000}")int context,@Value("${app.multi-agent.timeout-ms:150000}")long millis,
-            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles){
+            @Value("${app.multi-agent.goal-max-model-calls:160}")int goalModels,@Value("${app.multi-agent.goal-max-tool-calls:320}")int goalTools,
+            @Value("${app.multi-agent.goal-max-task-calls:48}")int goalTasks,@Value("${app.multi-agent.goal-max-tokens:320000}")long goalTokens,
+            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,JdbcGoalBudgetStore budgets){
         return new MultiAgentChatService(factory,runtime,registry,new RunBudget.Limits(models,tools,tasks,tokens,context,millis),
-                Clock.systemUTC(),traces,memory,profiles);
+                Clock.systemUTC(),traces,memory,profiles,budgets,new GoalBudgetStore.Limits(goalModels,goalTools,goalTasks,goalTokens));
     }
 }

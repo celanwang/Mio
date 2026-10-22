@@ -115,3 +115,16 @@ CREATE TABLE IF NOT EXISTS agent_states (
     UNIQUE(user_id, session_id, state_key)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_states_session ON agent_states(session_id);
+
+-- Cross-request budget reservations; completed/unknown model accounting is not reset on restart.
+CREATE TABLE IF NOT EXISTS goal_budgets (
+    goal_id TEXT PRIMARY KEY REFERENCES goals(id),
+    content TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_calls (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goal_budgets(goal_id),
+    state TEXT NOT NULL,
+    tokens BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_budget_calls_goal ON budget_calls(goal_id);

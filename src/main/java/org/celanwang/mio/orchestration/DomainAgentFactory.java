@@ -97,7 +97,7 @@ public final class DomainAgentFactory implements TaskWorker {
         },agent->{
             ChatService service=new ChatService(agent,weibo,jev,threshold,agent.getModel().getModelName(),"jev-latest",traces,trust,
                     policy,memory,habits,json,new ChatExecutionOptions(task.trustedIntent(goal),false,()->{
-                        execution.budget().model(0);execution.budget().tokens(null);
+                        execution.budget().model(0);
                     }));
             var request=new ChatRequest();request.setSessionId(task.childSessionId());
             if(!input.decisions().isEmpty())request.setConfirmations(input.decisions());
