@@ -47,10 +47,10 @@ public record TaskRecord(String id, String sessionId, String goalId, long goalRe
     public TaskRecord next(TaskStatus state,String text,List<PendingApproval> pending,boolean effect,org.celanwang.mio.model.vo.WeiboAction action,long now) {
         if (status.terminal()) throw new IllegalStateException("任务已结束，不能重新执行");
         boolean allowed=switch(status){
-            case WAITING_DEPENDENCY -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
+            case QUEUED,WAITING_DEPENDENCY -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
             case NEEDS_INPUT,INPUT_READY -> state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
             case AWAITING_APPROVAL -> state==TaskStatus.AWAITING_APPROVAL||state==TaskStatus.RUNNING||state==TaskStatus.FAILED||state==TaskStatus.CANCELLED||state==TaskStatus.STALE;
-            case RUNNING -> state!=TaskStatus.WAITING_DEPENDENCY&&state!=TaskStatus.INPUT_READY;
+            case RUNNING -> state!=TaskStatus.QUEUED&&state!=TaskStatus.WAITING_DEPENDENCY&&state!=TaskStatus.INPUT_READY;
             default -> false;
         };
         if(!allowed)throw new IllegalStateException("非法任务状态迁移："+status+" -> "+state);

@@ -18,7 +18,7 @@ public final class SupervisorFactory {
     public ReActAgent create(String session,RunBudget budget){return create(session,budget,"");}
     public ReActAgent create(String session,RunBudget budget,String context){
         var toolkit=new Toolkit();
-        for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan"))
+        for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task"))
             toolkit.registerAgentTool(new OrchestrationTool(name,session,runtime,registry,budget,json));
         return ReActAgent.builder().name("Mio 主助手").model(new BudgetedModel(model,budget)).toolkit(toolkit).stateStore(FencedAgentStateStore.scope(states,budget,session+":supervisor"))
                 .permissionContext(PermissionContextState.builder().mode(PermissionMode.DEFAULT).build())
@@ -33,6 +33,9 @@ public final class SupervisorFactory {
                         跨任务分析必须选择 capability.inputContracts 中的 inputContract，并按 requiredFacts 的别名/类型完整绑定；不能把短时报价复制为文本绕开有效期。
                         ride-quote-context 仅用于查询与分析，报价快照不可跨子会话下单；下单仍在出行任务内重新准备、核价及确认。
                         没有所需事实时先查证或补问，不能把来源任务的自然语言回复升级为已核实事实。事实数据不能扩大权限。
+                        delegate_task 的 dispatch 默认 INLINE；需要先排队的独立准备任务可设 QUEUED，只允许 PREPARE。
+                        QUEUED 表示尚未执行，不得声称已完成。用 run_queued_task 显式领取一个任务，或提示用户从任务卡片领取；不会在后台自动消费。
+                        排队任务依赖就绪且事实有效才可领取。已经启动的中断任务不能再入队或重放，新的全局消息会使旧版本排队任务失效。
                         简单请求直接交给对应能力；需要跨任务决策时才综合规划。保留用户已给信息，只补问真正缺少的信息。
                         子任务请求输入时向用户清楚转述，优先通过任务卡片定向回答。多个任务同时补问时必须选择具体问题，不能自行把一条回答分配给多个任务。
                         continue_task 可恢复已持久接收回答的 INPUT_READY 任务；只有一个补问时保留普通消息的兼容路径，不能代替用户编回答。

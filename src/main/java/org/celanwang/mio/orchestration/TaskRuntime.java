@@ -20,6 +20,7 @@ public final class TaskRuntime {
     private final List<OperationReconciler> reconcilers;
     private final List<FactExtractor> factExtractors;
     private final ExecutionLeaseStore leases;
+    private final TaskQueue queue;
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
         this(store,registry,worker,policy,clock,maxTasks,List.of());
@@ -34,7 +35,11 @@ public final class TaskRuntime {
         this(store,registry,worker,policy,clock,maxTasks,verifiers,reconcilers,factExtractors,null);
     }
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,ExecutionLeaseStore leases){
-        this.leases=leases;
+        this(store,registry,worker,policy,clock,maxTasks,verifiers,reconcilers,factExtractors,leases,null);
+    }
+    public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,ExecutionLeaseStore leases,TaskQueue queue){
+        if(queue!=null&&leases==null)throw new IllegalArgumentException("持久队列需要执行租约");
+        this.queue=queue;this.leases=leases;
         this.factExtractors=List.copyOf(factExtractors);
         this.store=store;this.registry=registry;this.worker=worker;this.policy=policy;this.clock=clock;this.maxTasks=maxTasks;
         this.verifiers=List.copyOf(verifiers);
@@ -63,7 +68,11 @@ public final class TaskRuntime {
     public PlanReview reviewPlan(String session){return PlanReview.of(goal(session),list(session),clock.millis(),store);}
     public GoalRecord goal(String session){return store.goal(session).orElseThrow(()->new IllegalArgumentException("目标不存在"));}
     public Optional<GoalRecord> findGoal(String session){return store.goal(session);}
-    public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).toList();}
+    public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).map(t->{
+        if(queue!=null&&t.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(t.id());return t;
+    }).toList();}
+    public TaskSummary summary(TaskRecord task){return TaskSummary.of(task,registry,queue==null||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED?null:
+            TaskQueue.View.of(queue.find(task.id()).orElseThrow(()->new IllegalStateException("排队任务缺少队列记录"))));}
     private TaskRecord recoverInterrupted(TaskRecord task){
         if(task.status()!=TaskStatus.RUNNING)return task;
         if(leases==null?owners.containsKey(task.id()):leases.valid(task.executionLease()))return task;
@@ -78,7 +87,7 @@ public final class TaskRuntime {
         try{changed=!registry.require(task.spec().capabilityId()).executionVersion().equals(task.capabilityVersion());}
         catch(IllegalArgumentException unavailable){changed=true;}
         boolean expired=task.status()==TaskStatus.AWAITING_APPROVAL&&task.approvals().stream().anyMatch(a->a.expiresAt()<=clock.millis());
-        boolean goalChanged=(task.status()==TaskStatus.AWAITING_APPROVAL||task.status()==TaskStatus.WAITING_DEPENDENCY||task.status()==TaskStatus.INPUT_READY)
+        boolean goalChanged=(task.status()==TaskStatus.AWAITING_APPROVAL||task.status()==TaskStatus.WAITING_DEPENDENCY||task.status()==TaskStatus.QUEUED||task.status()==TaskStatus.INPUT_READY)
                 &&store.goal(task.sessionId()).orElseThrow().revision()!=task.goalRevision();
         if(!changed&&!expired&&!goalChanged)return task;
         var stale=task.next(TaskStatus.STALE,changed?"领域技能版本已变更，请重新准备任务":goalChanged?"用户目标已改变，请重新准备":"本次确认已过期，请重新准备",List.of(),task.effectStarted(),clock.millis());
@@ -97,6 +106,7 @@ public final class TaskRuntime {
                 if(!same.get().spec().equals(spec))throw new IllegalArgumentException("同一任务 key 的参数已改变，请使用新任务或先取消旧任务");
                 return Mono.just(same.get());
             }
+            if(spec.dispatch()==TaskSpec.Dispatch.QUEUED&&queue==null)throw new IllegalStateException("准备任务队列未启用");
             registry.status(spec.capabilityId()).requireExecution();
             if(existing.size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");
             for(String dependency:spec.dependencies()){
@@ -106,8 +116,10 @@ public final class TaskRuntime {
             if(spec.scope()==TaskScope.REQUEST_APPROVAL&&existing.stream().anyMatch(t->t.spec().capabilityId().equals(spec.capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域存在结果不明的提交，请先核查，不创建新的写任务");
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
-                    capability.executionVersion(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());budget.fenced(()->{store.createTask(task);return null;});
-            return runWhenReady(task,goal,budget);
+                    capability.executionVersion(),spec.dispatch()==TaskSpec.Dispatch.QUEUED?TaskStatus.QUEUED:TaskStatus.WAITING_DEPENDENCY,
+                    spec.dispatch()==TaskSpec.Dispatch.QUEUED?"已进入准备队列，前置任务就绪后可领取执行":"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());
+            budget.fenced(()->{if(spec.dispatch()==TaskSpec.Dispatch.QUEUED)queue.enqueue(task);else store.createTask(task);return null;});
+            return spec.dispatch()==TaskSpec.Dispatch.QUEUED?Mono.just(task):runWhenReady(task,goal,budget);
         });
     }
     private Mono<TaskRecord> runWhenReady(TaskRecord task,GoalRecord goal,RunBudget budget){
@@ -126,6 +138,7 @@ public final class TaskRuntime {
         return Mono.defer(()->{
             requireLease(session,budget);
             var task=budget.fenced(()->require(session,id));var goal=goal(session);
+            if(task.status()==TaskStatus.QUEUED)return runQueuedTask(session,id,budget);
             if(task.status()==TaskStatus.RUNNING){
                 return Mono.just(recoverInterrupted(task));
             }
@@ -142,6 +155,21 @@ public final class TaskRuntime {
             return answerTask(session,id,task.questionId(),goal.latestUserInput(),budget);
         });
     }
+    public Mono<TaskRecord> runQueuedTask(String session,String id,RunBudget budget){
+        return Mono.defer(()->{
+            requireLease(session,budget);if(queue==null)throw new IllegalStateException("准备任务队列未启用");
+            budget.fenced(()->list(session));var task=budget.fenced(()->require(session,id));
+            if(task.status()!=TaskStatus.QUEUED||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED)throw new IllegalStateException("任务不在等待领取的准备队列中");
+            registry.status(task.spec().capabilityId()).requireExecution();
+            registry.require(task.spec().capabilityId()).validateInputs(task.spec(),TaskFacts.bind(store,task,clock.millis()));
+            var claimed=budget.fenced(()->queue.claim(id,budget.lease()));
+            if(claimed.isEmpty())return Mono.just(store.task(id).orElseThrow());
+            var claim=claimed.get();
+            return execute(task,goal(session),new TaskWorker.Input(true,"",List.of()),budget,Map.of(),false,claim)
+                    .map(result->{queue.settle(claim);return result;})
+                    .onErrorResume(error->{try{queue.settle(claim);}catch(RuntimeException settlement){error.addSuppressed(settlement);}return Mono.error(error);});
+        });
+    }
     public Mono<TaskRecord> answerTask(String session,String id,String questionId,String text,RunBudget budget){
         return Mono.defer(()->{
             requireLease(session,budget);
@@ -156,7 +184,11 @@ public final class TaskRuntime {
         return execute(task,goal,input,budget,approved,false);
     }
     private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved,boolean reserved){
+        return execute(task,goal,input,budget,approved,reserved,null);
+    }
+    private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved,boolean reserved,TaskQueue.Claim claim){
         return Mono.defer(()->{
+            if(task.status()==TaskStatus.QUEUED&&claim==null)throw new IllegalStateException("排队任务必须先领取");
             if(leases!=null&&budget.lease()==null)throw new IllegalStateException("领域执行缺少持久会话租约");
             budget.active();
             Object owner=new Object();if(owners.putIfAbsent(task.id(),owner)!=null)throw new IllegalStateException("任务正在执行");
@@ -170,7 +202,7 @@ public final class TaskRuntime {
                 }
                 if(!reserved)budget.task();
                 var running=current.start(budget.lease(),clock.millis());
-                budget.fenced(()->{store.saveTask(current,running,"task_running");return null;});
+                budget.fenced(()->{if(claim==null)store.saveTask(current,running,"task_running");else queue.start(claim,current,running);return null;});
                 var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers,factExtractors,registry.require(task.spec().capabilityId()));
                 return Mono.defer(()->{
                     var bound=new TaskWorker.Input(input.first(),input.userText(),input.decisions(),TaskFacts.bind(store,running,clock.millis()));
@@ -253,10 +285,13 @@ public final class TaskRuntime {
         });
     }
     public TaskRecord cancel(String session,String id){
-        var old=require(session,id);if(old.status().terminal())return old;
+        var old=require(session,id);if(old.status().terminal()){
+            if(queue!=null&&old.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(id);return old;
+        }
         var next=old.next(old.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.CANCELLED,
                 old.effectStarted()?"请求可能已发出，请先核查实际业务状态":"已停止后续执行",List.of(),old.effectStarted(),clock.millis());
-        store.saveTask(old,next,"task_cancelled");return next;
+        store.saveTask(old,next,"task_cancelled");
+        if(queue!=null&&next.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(id);return next;
     }
     public Mono<TaskRecord> reconcile(String session,String taskId,String operationId,RunBudget budget){
         return Mono.defer(()->{

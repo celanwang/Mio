@@ -65,9 +65,10 @@ public class MultiAgentConfig {
     @Bean JdbcCoordinationStore coordinationStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcCoordinationStore(jdbc,source,json);}
     @Bean JdbcAgentStateStore coordinationAgentStateStore(JdbcTemplate jdbc,ObjectMapper json){return new JdbcAgentStateStore(jdbc,json);}
     @Bean JdbcExecutionLeaseStore executionLeaseStore(JdbcTemplate jdbc,DataSource source){return new JdbcExecutionLeaseStore(jdbc,source);}
+    @Bean JdbcTaskQueue taskQueue(JdbcTemplate jdbc,DataSource source,ObjectMapper json,JdbcCoordinationStore store,JdbcExecutionLeaseStore leases){return new JdbcTaskQueue(jdbc,source,json,store,leases);}
     @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
-    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();};}
+    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();};}
     @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> definitions,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
@@ -78,8 +79,8 @@ public class MultiAgentConfig {
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}
     @Bean OperationReconciler tencentOperationReconciler(TencentRideService service){return new TencentOperationReconciler(service);}
     @Bean TaskRuntime taskRuntime(JdbcCoordinationStore store,AgentRegistry registry,DomainAgentFactory factory,PolicyEngine policy,List<OperationVerifier> verifiers,
-                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,JdbcExecutionLeaseStore leases){
-        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers,factExtractors,leases);
+                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue){
+        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers,factExtractors,leases,queue);
     }
     @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json){
         return new SupervisorFactory(model,states,registry,runtime,json);

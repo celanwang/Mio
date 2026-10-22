@@ -56,7 +56,8 @@ public final class MultiAgentChatService {
                 else if(resume){
                     String id=request.getResumeTaskId();
                     if(id.isBlank()||id.length()>200)throw new IllegalArgumentException("任务编号无效");
-                    if(runtime.require(session,id).status()!=TaskStatus.INPUT_READY)throw new IllegalStateException("当前任务没有等待恢复的已接收回答");
+                    var resumable=runtime.require(session,id).status();
+                    if(resumable!=TaskStatus.INPUT_READY&&resumable!=TaskStatus.QUEUED)throw new IllegalStateException("当前任务没有等待恢复的回答或排队准备任务");
                     prepare=runtime.continueTask(session,id,budget);
                 }
                 else if(taskReply){
@@ -73,7 +74,7 @@ public final class MultiAgentChatService {
                 return prepare.then(Mono.defer(()->Mono.using(()->{
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
                     if(taskReply)data="用户已回答任务 "+request.getTaskReply().taskId()+" 的问题，服务端已恢复该任务。请读取 list_tasks 汇报；回答仅属于这个任务，不能传播为其他任务的新增授权或全局偏好。";
-                    if(resume)data="用户要求继续已持久接收回答的任务，服务端已按原回答恢复。请读取 list_tasks 准确汇报，不添加或重复任何业务批准。";
+                    if(resume)data="用户要求继续已接收回答的任务或领取排队准备任务，服务端已按原任务范围处理。请读取 list_tasks 准确汇报，不添加或重复任何业务批准。";
                     if(profiles!=null){
                         var global=profiles.pages().stream().filter(p->p.scope().equals("global")).limit(20).toList();
                         String text=profiles.render(global);
@@ -107,6 +108,6 @@ public final class MultiAgentChatService {
             calls.add(new ToolConfirmation(a.id(),a.tool(),a.description(),a.input(),true,a.contractHash(),task.id(),registry.require(task.spec().capabilityId()).name()));
         WeiboAction action=tasks.stream().filter(t->t.status()==TaskStatus.NEEDS_INPUT&&t.action()!=null).map(TaskRecord::action).findFirst().orElse(null);
         var budget=budgetStore==null?null:runtime.findGoal(session).flatMap(g->budgetStore.find(g.id())).orElse(null);
-        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(t->TaskSummary.of(t,registry)).toList(),true,budget);
+        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(runtime::summary).toList(),true,budget);
     }
 }

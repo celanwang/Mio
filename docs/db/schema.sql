@@ -149,3 +149,13 @@ CREATE TABLE IF NOT EXISTS execution_leases(
     expires_at BIGINT NOT NULL,
     session_id TEXT NOT NULL
 );
+
+-- Explicit foreground dispatch; claimed-but-not-started may recover, started work is never replayed.
+CREATE TABLE IF NOT EXISTS task_queue(
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    session_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    content TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_queue_session ON task_queue(session_id,state);

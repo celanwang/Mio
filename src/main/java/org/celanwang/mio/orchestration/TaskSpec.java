@@ -3,7 +3,11 @@ package org.celanwang.mio.orchestration;
 import java.util.List;
 
 public record TaskSpec(String key, String capabilityId, String objective, List<String> constraints,
-                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs,String inputContract) {
+                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs,String inputContract,Dispatch dispatch) {
+    public enum Dispatch { INLINE,QUEUED }
+    public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope,List<InputBinding> inputs,String inputContract){
+        this(key,capabilityId,objective,constraints,dependencies,scope,inputs,inputContract,Dispatch.INLINE);
+    }
     public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope,List<InputBinding> inputs){
         this(key,capabilityId,objective,constraints,dependencies,scope,inputs,"default");
     }
@@ -20,6 +24,8 @@ public record TaskSpec(String key, String capabilityId, String objective, List<S
         if (dependencies.size() > 8 || dependencies.stream().anyMatch(key::equals)
                 || dependencies.stream().distinct().count() != dependencies.size()) throw new IllegalArgumentException("任务依赖无效");
         scope = scope == null ? TaskScope.PREPARE : scope;
+        dispatch=dispatch==null?Dispatch.INLINE:dispatch;
+        if(dispatch==Dispatch.QUEUED&&scope!=TaskScope.PREPARE)throw new IllegalArgumentException("排队执行仅允许准备任务");
         inputContract=inputContract==null?"default":inputContract;
         if(!inputContract.matches("[a-z][a-z0-9-]{0,63}"))throw new IllegalArgumentException("输入契约编号无效");
         inputs=inputs==null?List.of():List.copyOf(inputs);

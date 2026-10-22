@@ -30,7 +30,7 @@ public final class TaskDependencies {
                 }
                 if(source.status()!=TaskStatus.COMPLETED){
                     if(source.status().terminal())result.add(cause(DEPENDENCY_FAILED,id,"","",now));
-                    else if(task.status()!=TaskStatus.WAITING_DEPENDENCY)result.add(cause(DEPENDENCY_NOT_COMPLETE,id,"","",now));
+                    else if(task.status()!=TaskStatus.WAITING_DEPENDENCY&&task.status()!=TaskStatus.QUEUED)result.add(cause(DEPENDENCY_NOT_COMPLETE,id,"","",now));
                     continue;
                 }
                 for(var binding:task.spec().inputs())if(binding.taskId().equals(id)){

@@ -3,8 +3,9 @@ package org.celanwang.mio.orchestration;
 /** UI and supervisor view. Approval decisions and SDK checkpoints remain server-side. */
 public record TaskSummary(String id,String key,String agent,String objective,TaskStatus status,String reply,
                           long goalRevision,boolean verificationRequired,int pendingApprovals,java.util.List<OperationRecord> operations,java.util.List<TaskFact> facts,String questionId,
-                          TaskInvalidation invalidation,java.util.List<String> dependencies,java.util.List<InputBinding> inputs,String inputContract) {
-    public static TaskSummary of(TaskRecord task,AgentRegistry registry){
+                          TaskInvalidation invalidation,java.util.List<String> dependencies,java.util.List<InputBinding> inputs,String inputContract,TaskSpec.Dispatch dispatch,TaskQueue.View queue) {
+    public static TaskSummary of(TaskRecord task,AgentRegistry registry){return of(task,registry,null);}
+    public static TaskSummary of(TaskRecord task,AgentRegistry registry,TaskQueue.View queue){
         String name;
         try{name=registry.require(task.spec().capabilityId()).name();}catch(IllegalArgumentException removed){name=task.spec().capabilityId();}
         String reply=task.status()==TaskStatus.UNKNOWN&&!task.unresolvedEffects()
@@ -12,6 +13,6 @@ public record TaskSummary(String id,String key,String agent,String objective,Tas
         if(task.invalidation()!=null)reply="当前结果已失效："+task.invalidation().message()+"。历史操作记录保留，不重跑已提交动作。\n"+reply;
         return new TaskSummary(task.id(),task.spec().key(),name,task.spec().objective(),
                 task.status(),reply,task.goalRevision(),task.unresolvedEffects(),
-                (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations(),TaskFacts.validAt(task,System.currentTimeMillis()),task.questionId(),task.invalidation(),task.spec().dependencies(),task.spec().inputs(),task.spec().inputContract());
+                (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations(),TaskFacts.validAt(task,System.currentTimeMillis()),task.questionId(),task.invalidation(),task.spec().dependencies(),task.spec().inputs(),task.spec().inputContract(),task.spec().dispatch(),queue);
     }
 }
