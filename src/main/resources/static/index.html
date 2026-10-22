@@ -275,19 +275,19 @@ function validTasks(tasks) {
 }
 function renderTasks() {
   const container = $('task-progress'); container.replaceChildren(); const tasks = chat.tasks || []; container.hidden = !tasks.length;
-  const labels = { WAITING_DEPENDENCY:'等待前置任务',RUNNING:'处理中',NEEDS_INPUT:'等待补充信息',INPUT_READY:'回答已收到，等待继续',AWAITING_APPROVAL:'等待你确认',COMPLETED:'本轮已结束',FAILED:'未完成',UNKNOWN:'提交结果待核查',CANCELLED:'已停止',STALE:'信息已变更，需重新准备' };
+  const labels = { QUEUED:'已排队，等待领取',WAITING_DEPENDENCY:'等待前置任务',RUNNING:'处理中',NEEDS_INPUT:'等待补充信息',INPUT_READY:'回答已收到，等待继续',AWAITING_APPROVAL:'等待你确认',COMPLETED:'本轮已结束',FAILED:'未完成',UNKNOWN:'提交结果待核查',CANCELLED:'已停止',STALE:'信息已变更，需重新准备' };
   for (const task of tasks) {
     const card = el('div','task-card'), heading = el('div','task-heading');
     const statusLabel = task.status === 'UNKNOWN' && task.verificationRequired === false ? '执行中断，业务结果已核实' : labels[task.status] || '状态待核对';
     heading.append(el('strong','',task.agent),el('span','',statusLabel)); card.append(heading,el('p','',task.objective));
     if (task.reply) card.append(el('p','',task.reply));
-    if (['WAITING_DEPENDENCY','RUNNING','NEEDS_INPUT','INPUT_READY','AWAITING_APPROVAL'].includes(task.status)) {
+    if (['QUEUED','WAITING_DEPENDENCY','RUNNING','NEEDS_INPUT','INPUT_READY','AWAITING_APPROVAL'].includes(task.status)) {
       const actions = el('div','task-actions'), stop = el('button','','停止此任务'); stop.type = 'button'; stop.disabled = busy; stop.onclick = () => cancelTask(task.id); actions.append(stop); card.append(actions);
       if (task.status === 'NEEDS_INPUT' && typeof task.questionId === 'string') {
         const answer = el('button','','回答此任务的问题'); answer.type = 'button'; answer.disabled = busy; answer.onclick = () => selectTaskReply(task); actions.prepend(answer);
       }
-      if (task.status === 'INPUT_READY') {
-        const resume = el('button','','继续此任务'); resume.type = 'button'; resume.disabled = busy; resume.onclick = () => sendMessage('',[],task.id); actions.prepend(resume);
+      if (task.status === 'INPUT_READY' || task.status === 'QUEUED') {
+        const resume = el('button','',task.status === 'QUEUED' ? '领取并执行准备任务' : '继续此任务'); resume.type = 'button'; resume.disabled = busy; resume.onclick = () => sendMessage('',[],task.id); actions.prepend(resume);
       }
     }
     container.append(card);
@@ -575,6 +575,7 @@ document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = 
 async function sendMessage(text,confirmations = [],resumeTaskId = null) {
   if (busy) return;
   const isConfirmation = confirmations.length > 0, isResume = typeof resumeTaskId === 'string';
+  const queuedResume = isResume && (chat.tasks || []).some(task => task.id === resumeTaskId && task.status === 'QUEUED');
   const replyTarget = !isConfirmation && !isResume ? chat.replyTarget : null;
   const controlDraft = isConfirmation || isResume ? $('message').value : null;
   if (replyTarget && !currentReplyQuestion()) { showError('问题已变更，请核对任务状态后重新选择。'); return; }
@@ -598,7 +599,7 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
       const decisionText = allAllowed ? '允许本次操作' : allDenied ? '拒绝本次操作' : confirmations.map(c => `${c.approved ? '允许' : '拒绝'}：${operationInfo(chat.pendingConfirmations.find(call => call.toolCallId === c.toolCallId))[0]}`).join('\n');
       chat.messages.push({ role:'user',content:decisionText });
     }
-    if (isResume) chat.messages.push({role:'user',content:'继续已接收回答的任务'});
+    if (isResume) chat.messages.push({role:'user',content:queuedResume ? '领取并执行准备任务' : '继续已接收回答的任务'});
     if (replyTarget) chat.replyTarget = null;
     chat.multiAgent = data.multiAgent === true; chat.tasks = validTasks(data.tasks || []);
     chat.pendingConfirmations = calls;
