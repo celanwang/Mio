@@ -148,6 +148,9 @@ textarea{display:block;width:100%;padding:0;background:transparent;border:0;outl
 }
 @media(max-width:420px){.panel-status{display:none}.suggestion{gap:8px}.suggestion>.icon:not(.arrow){width:30px;height:30px;padding:7px}.composer-foot>span:first-child{max-width:145px}.page-footer{letter-spacing:0}.brand-sub{letter-spacing:1px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+#goal-overview{max-height:28%;overflow:auto;padding:8px 24px;border-bottom:1px solid var(--border);background:var(--soft);font-size:13px;line-height:1.8;flex-shrink:0}
+.chat-panel:has(#goal-overview:not([hidden])) .conversation{min-height:160px;flex-shrink:0}
+#goal-overview[hidden]{display:none}.goal-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.goal-actions{display:flex;gap:8px}.goal-note{color:var(--secondary)}
   </style>
 </head>
 <body>
@@ -187,6 +190,7 @@ textarea{display:block;width:100%;padding:0;background:transparent;border:0;outl
   <main class="workspace">
     <section class="chat-panel" aria-label="聊天工作区">
       <div class="panel-header"><div class="panel-heading"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg><strong>智能对话</strong><span id="panel-status" class="panel-status" data-status="idle" role="status"><i class="status-dot"></i><span id="status-text">等待消息</span></span></div><div class="chat-tools"><button id="new-chat" class="quiet" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新对话</button><button id="export" class="quiet" type="button" title="导出 Markdown（.md）"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>导出</button><a class="quiet" href="/panel.html" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px">执行面板</a></div></div>
+      <div id="goal-overview" role="region" aria-label="目标状态与预算" aria-live="polite" hidden></div>
       <div id="conversation" class="conversation" role="log" aria-live="polite" aria-relevant="additions" aria-label="对话记录">
         <div id="welcome" class="welcome"><div class="welcome-orbit"><svg aria-hidden="true"><use href="#i-orbit"/></svg></div><h2>你好，今天想做些什么？</h2><p>从一个问题开始，把想法变成行动。<br>需要调用工具时，我会先征求你的确认。</p>
           <div class="suggestions">
@@ -234,7 +238,7 @@ const defaultBase = location.protocol === 'file:' || location.port === '63342' ?
 let apiBase = defaultBase;
 try { apiBase = validateBase(readStore('localStorage','mio-api-base') || defaultBase); } catch (_) {}
 $('api-base').value = apiBase;
-let busy = false;
+let busy = false, goalControlBusy = false, chatAbortController = null;
 let chat;
 let toastTimer;
 let theme = readStore('localStorage','mio-theme') === 'light' ? 'light' : 'dark';
@@ -253,7 +257,7 @@ function showError(text) { $('error-text').textContent = text; $('error').hidden
 $('dismiss-error').onclick = () => $('error').hidden = true;
 function storageKey() { return 'mio-chat-v2:' + apiBase; }
 function save() { writeStore('sessionStorage',storageKey(),JSON.stringify(chat)); }
-function createChat() { return { id: globalThis.crypto?.randomUUID?.() || 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2), sessionId: null, messages: [], pendingConfirmations: [], tasks:[], multiAgent:false, replyTarget:null, weiboAction:null, weiboAuthorizationPending:false }; }
+function createChat() { return { id: globalThis.crypto?.randomUUID?.() || 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2), sessionId: null, messages: [], pendingConfirmations: [], tasks:[], goal:null, budget:null, multiAgent:false, replyTarget:null, weiboAction:null, weiboAuthorizationPending:false }; }
 function validReplyTarget(target) {
   return target && typeof target.taskId === 'string' && typeof target.questionId === 'string' && typeof target.agent === 'string' ? target : null;
 }
@@ -273,6 +277,58 @@ function validTasks(tasks) {
   if (!Array.isArray(tasks) || tasks.some(t => !t || typeof t.id !== 'string' || typeof t.agent !== 'string' || typeof t.objective !== 'string' || typeof t.status !== 'string' || typeof t.reply !== 'string')) throw new Error('服务返回的任务状态格式异常。');
   return tasks;
 }
+function validGoal(goal) {
+  if (goal == null) return null;
+  if (!['ACTIVE','PAUSED','CLOSED'].includes(goal.state) || !Number.isSafeInteger(goal.controlRevision) || goal.controlRevision < 0) throw new Error('目标控制状态异常，请重新读取。');
+  return goal;
+}
+function validBudget(budget) {
+  if (budget == null) return null;
+  if (!budget.limits || ['models','tools','tasks','knownTokens','pendingUsage','unknownUsage'].some(k => !Number.isFinite(budget[k]) || budget[k] < 0)
+      || ['models','tools','tasks','tokens'].some(k => !Number.isFinite(budget.limits[k]) || budget.limits[k] < 1)) throw new Error('目标预算状态异常。');
+  return budget;
+}
+function goalStopped() { return chat.goal && chat.goal.state !== 'ACTIVE'; }
+function renderGoal() {
+  const container=$('goal-overview'), expanded=container.querySelector('details')?.open===true; container.replaceChildren(); container.hidden=!chat.multiAgent || !chat.goal; if(container.hidden)return;
+  const goal=chat.goal, labels={ACTIVE:'进行中',PAUSED:'已暂停',CLOSED:'已关闭'}, row=el('div','goal-row');
+  row.append(el('strong','','目标'+labels[goal.state]+' · 执行 '+goal.running+' · 排队 '+goal.queued+' · 失败 '+goal.failed+' · 失效 '+goal.invalidated+' · 补问 '+goal.questions+' · 待确认 '+goal.approvals+' · 待核查 '+goal.unresolved));
+  const actions=el('div','goal-actions');
+  for(const [state,label] of (goal.state==='ACTIVE'?[['PAUSED','暂停目标'],['CLOSED','关闭目标']]:goal.state==='PAUSED'?[['ACTIVE','恢复目标'],['CLOSED','关闭目标']]:[])) {
+    const button=el('button','quiet',label);button.type='button';button.disabled=goalControlBusy;button.onclick=()=>changeGoal(state);actions.append(button);
+  }
+  row.append(actions);container.append(row);
+  const details=el('details','goal-details');details.open=expanded;
+  if(chat.budget){const b=chat.budget;details.append(el('summary','goal-note','累计预占：模型 '+b.models+'/'+b.limits.models+' · 工具 '+b.tools+'/'+b.limits.tools+' · 任务 '+b.tasks+'/'+b.limits.tasks+' · 已报告 token '+b.knownTokens+'/'+b.limits.tokens+(b.usageComplete?' · 统计说明':' · 用量有缺口（展开）')));
+    details.append(el('div','goal-note',b.usageComplete?'当前账本用量完整；token 阈值不等于费用硬上限。':'用量存在缺口：待结算 '+b.pendingUsage+'，未知 '+b.unknownUsage+(b.historyUnknown?'，历史不可追溯':'')+'；不是零消耗。'));
+  }else details.append(el('summary','goal-note','目标边界与预算说明'));
+  details.append(el('div','goal-note',goal.state==='CLOSED'?'已停止新执行，历史、预算与未核查操作保留。开启新对话可规划新目标。':goal.state==='PAUSED'?'待运行任务保留；恢复后需显式继续。旧批准与中断任务不会自动恢复。':'受控前台预览 · 生产资格尚未评定'));
+  container.append(details);
+}
+function applyOperational(data){
+  const goal=validGoal(data.goal), budget=validBudget(data.budget);
+  if(goal && chat.goal && goal.id===chat.goal.id && goal.controlRevision<chat.goal.controlRevision)return false;
+  chat.goal=goal;
+  if(!budget || !chat.budget || budget.goalId!==chat.budget.goalId || !Number.isSafeInteger(budget.revision) || !Number.isSafeInteger(chat.budget.revision) || budget.revision>=chat.budget.revision)chat.budget=budget;
+  return true;
+}
+async function changeGoal(state) {
+  if(goalControlBusy || !chat.goal)return;const current=chat, base=apiBase;goalControlBusy=true;renderGoal();
+  try {
+    const response=await fetch(base+'/api/tasks/goal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId,expectedControlRevision:chat.goal.controlRevision,state})});
+    const data=await response.json();if(!response.ok)throw new Error(data.message || '目标状态未更新，请核对。');if(chat!==current || apiBase!==base)return;
+    $('error').hidden=true;
+    if(!applyOperational(data)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);chat.pendingConfirmations=validCalls(data.pendingConfirmations||[]);chat.weiboAction=validWeiboAction(data.weiboAction);save();render();
+    if(goalStopped())chatAbortController?.abort();
+  }catch(error){showError(error.message);try{await refreshTasks(true);if(goalStopped())chatAbortController?.abort();}catch(_){} }
+  finally{goalControlBusy=false;renderGoal();}
+}
+async function reconcileTask(taskId,operationId){
+  if(busy)return;setBusy(true);
+  try{const response=await fetch(apiBase+'/api/tasks/'+encodeURIComponent(taskId)+'/operations/'+encodeURIComponent(operationId)+'/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId})});
+    const data=await response.json();if(!response.ok)throw new Error(data.message||'核查未完成，请保留未知状态。');if(!applyOperational(data)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);save();render();
+  }catch(error){showError(error.message);try{await refreshTasks(true);}catch(_){} }finally{setBusy(false);}
+}
 function renderTasks() {
   const container = $('task-progress'); container.replaceChildren(); const tasks = chat.tasks || []; container.hidden = !tasks.length;
   const labels = { QUEUED:'已排队，等待领取',WAITING_DEPENDENCY:'等待前置任务',RUNNING:'处理中',NEEDS_INPUT:'等待补充信息',INPUT_READY:'回答已收到，等待继续',AWAITING_APPROVAL:'等待你确认',COMPLETED:'本轮已结束',FAILED:'未完成',UNKNOWN:'提交结果待核查',CANCELLED:'已停止',STALE:'信息已变更，需重新准备' };
@@ -284,11 +340,14 @@ function renderTasks() {
     if (['QUEUED','WAITING_DEPENDENCY','RUNNING','NEEDS_INPUT','INPUT_READY','AWAITING_APPROVAL'].includes(task.status)) {
       const actions = el('div','task-actions'), stop = el('button','','停止此任务'); stop.type = 'button'; stop.disabled = busy; stop.onclick = () => cancelTask(task.id); actions.append(stop); card.append(actions);
       if (task.status === 'NEEDS_INPUT' && typeof task.questionId === 'string') {
-        const answer = el('button','','回答此任务的问题'); answer.type = 'button'; answer.disabled = busy; answer.onclick = () => selectTaskReply(task); actions.prepend(answer);
+        const answer = el('button','','回答此任务的问题'); answer.type = 'button'; answer.disabled = busy || goalStopped(); answer.onclick = () => selectTaskReply(task); actions.prepend(answer);
       }
       if (task.status === 'INPUT_READY' || task.status === 'QUEUED') {
-        const resume = el('button','',task.status === 'QUEUED' ? '领取并执行准备任务' : '继续此任务'); resume.type = 'button'; resume.disabled = busy; resume.onclick = () => sendMessage('',[],task.id); actions.prepend(resume);
+        const resume = el('button','',task.status === 'QUEUED' ? '领取并执行准备任务' : '继续此任务'); resume.type = 'button'; resume.disabled = busy || goalStopped(); resume.onclick = () => sendMessage('',[],task.id); actions.prepend(resume);
       }
+    }
+    if(Array.isArray(task.reconcilableOperations))for(const operationId of task.reconcilableOperations){
+      const check=el('button','quiet','核查待定操作');check.type='button';check.disabled=busy;check.onclick=()=>reconcileTask(task.id,operationId);card.append(check);
     }
     container.append(card);
   }
@@ -299,14 +358,14 @@ async function refreshTasks(discover = false) {
   const response = await fetch(base + '/api/tasks?sessionId=' + encodeURIComponent(session), {cache:'no-store'});
   if (!response.ok) return;
   const data = await response.json(); if (chat !== currentChat || apiBase !== base || data.multiAgent !== true) return;
-  chat.multiAgent = true; chat.sessionId = data.sessionId; chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
+  chat.multiAgent = true; chat.sessionId = data.sessionId; if(!applyOperational(data))return; chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
 }
 async function cancelTask(taskId) {
   if (busy || !chat.sessionId) return; setBusy(true);
   try {
     const response = await fetch(apiBase + '/api/tasks/' + encodeURIComponent(taskId) + '/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId})});
     const data = await response.json(); if (!response.ok) throw new Error(data.message || '暂时无法停止任务。');
-    chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
+    if(!applyOperational(data)){await refreshTasks(true);return;} chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
   } catch (error) { showError(error.message); }
   finally {setBusy(false);render();}
 }
@@ -316,7 +375,7 @@ function loadChat() {
     const stored = JSON.parse(readStore('sessionStorage',storageKey()) || 'null');
     if (stored && typeof stored.id === 'string' && stored.id && Array.isArray(stored.messages) && stored.messages.every(m => m && ['user','assistant'].includes(m.role) && typeof m.content === 'string')) {
       validCalls(stored.pendingConfirmations || []);
-      chat = { id:stored.id, messages:stored.messages, sessionId:typeof stored.sessionId === 'string' ? stored.sessionId : null, pendingConfirmations:stored.pendingConfirmations || [], tasks:validTasks(stored.tasks || []), multiAgent:stored.multiAgent === true, replyTarget:validReplyTarget(stored.replyTarget), weiboAction:validWeiboAction(stored.weiboAction), weiboAuthorizationPending:stored.weiboAuthorizationPending === true };
+      chat = { id:stored.id, messages:stored.messages, sessionId:typeof stored.sessionId === 'string' ? stored.sessionId : null, pendingConfirmations:stored.pendingConfirmations || [], tasks:validTasks(stored.tasks || []), goal:validGoal(stored.goal), budget:validBudget(stored.budget), multiAgent:stored.multiAgent === true, replyTarget:validReplyTarget(stored.replyTarget), weiboAction:validWeiboAction(stored.weiboAction), weiboAuthorizationPending:stored.weiboAuthorizationPending === true };
     }
   } catch (_) {}
   render();
@@ -475,7 +534,7 @@ function addMessage(message,pending = false) {
 function scrollToLatest() { $('conversation').scrollTop = $('conversation').scrollHeight; }
 function render() {
   $('messages').replaceChildren(); $('welcome').hidden = chat.messages.length > 0 || chat.pendingConfirmations.length > 0;
-  chat.messages.forEach(message => addMessage(message)); renderConfirmations(); renderTasks(); updateComposer(); if (chat.messages.length) scrollToLatest();
+  chat.messages.forEach(message => addMessage(message)); renderConfirmations(); renderTasks(); renderGoal(); updateComposer(); if (chat.messages.length) scrollToLatest();
 }
 const operations = {
   'delivery-query-addresses':['查看配送地址','需要读取你在麦当劳账号中保存的配送地址。'],
@@ -543,17 +602,17 @@ function updateComposer() {
   $('clear-reply').disabled = busy;
   $('chat-form').dataset.mode = waiting ? 'confirmation' : 'message';
   $('message-input').hidden = waiting;
-  $('send').disabled = busy || replyExpired || (!waiting && !$('message').value.trim()); $('message').disabled = busy || waiting;
-  $('deny').hidden = !chat.pendingConfirmations.length; $('deny').disabled = busy;
+  $('send').disabled = busy || goalStopped() || replyExpired || (!waiting && !$('message').value.trim()); $('message').disabled = busy || waiting;
+  $('deny').hidden = !chat.pendingConfirmations.length; $('deny').disabled = busy || goalStopped();
   $('send-label').textContent = busy ? '处理中' : waiting ? '允许' : '发送';
   $('send-icon').setAttribute('href',waiting ? '#i-check' : '#i-send');
   $('send').setAttribute('aria-label',waiting ? '允许本次' + chat.pendingConfirmations.length + '项操作' : '发送消息');
   $('deny').setAttribute('aria-label','拒绝本次' + chat.pendingConfirmations.length + '项操作');
   $('new-chat').disabled = busy; $('export').disabled = busy || !chat.messages.length; $('api-base').disabled = busy; $('save-api').disabled = busy;
-  $('hint').textContent = busy ? '正在处理，请稍候…' : waiting ? '授权仅对本次操作有效' : chat.replyTarget ? '此回答仅用于所选任务，业务操作仍按原权限确认' : chat.multiAgent && chat.pendingConfirmations.length ? '补充或修改要求会使旧确认失效' : 'Enter 发送 · Shift + Enter 换行';
-  $('composer-label').textContent = waiting ? '等待确认 · ' + chat.pendingConfirmations.length + ' 项' : busy ? 'Mio · 正在思考' : 'Mio · 随时为你';
+  $('hint').textContent = !busy && goalStopped() ? (chat.goal.state==='CLOSED'?'目标已关闭，请开启新对话。':'恢复目标后可继续；草稿和待核查操作保留。') : busy ? '正在处理，请稍候…' : waiting ? '授权仅对本次操作有效' : chat.replyTarget ? '此回答仅用于所选任务，业务操作仍按原权限确认' : chat.multiAgent && chat.pendingConfirmations.length ? '补充或修改要求会使旧确认失效' : 'Enter 发送 · Shift + Enter 换行';
+  $('composer-label').textContent = !busy && goalStopped() ? (chat.goal.state==='CLOSED'?'目标已关闭 · 草稿保留':'目标已暂停 · 草稿保留') : waiting ? '等待确认 · ' + chat.pendingConfirmations.length + ' 项' : busy ? 'Mio · 正在思考' : 'Mio · 随时为你';
   $('panel-status').dataset.status = busy ? 'busy' : waiting ? 'waiting' : chat.messages.length ? 'ready' : 'idle';
-  $('status-text').textContent = busy ? '正在思考' : waiting ? '等待确认' : chat.messages.length ? '可以继续对话' : '等待消息';
+  $('status-text').textContent = goalStopped() ? (chat.goal.state==='CLOSED'?'目标已关闭':'目标已暂停') : busy ? '正在思考' : waiting ? '等待确认' : chat.messages.length ? '可以继续对话' : '等待消息';
   $('conversation').setAttribute('aria-busy',String(busy));
   $('chat-form').setAttribute('aria-busy',String(busy));
 }
@@ -561,7 +620,7 @@ function submitConfirmations(approved) {
   if (busy || !chat.pendingConfirmations.length) return;
   sendMessage('',chat.pendingConfirmations.map(call => ({ toolCallId:call.toolCallId,approved })));
 }
-function setBusy(value) { busy = value; updateComposer(); renderConfirmations(); renderTasks(); }
+function setBusy(value) { busy = value; updateComposer(); renderConfirmations(); renderTasks(); renderGoal(); }
 function resizeInput() { $('message').style.height = 'auto'; $('message').style.height = Math.min($('message').scrollHeight,180) + 'px'; }
 $('message').addEventListener('input',() => { resizeInput(); updateComposer(); });
 $('message').addEventListener('keydown',event => { if (!busy && (!chat.pendingConfirmations.length || chat.multiAgent) && event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('chat-form').requestSubmit(); } });
@@ -573,7 +632,7 @@ $('chat-form').onsubmit = event => {
 $('deny').onclick = () => submitConfirmations(false);
 document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = () => { if (busy || (chat.pendingConfirmations.length && !chat.multiAgent)) return; $('message').value = button.dataset.prompt; resizeInput(); updateComposer(); $('message').focus(); }; });
 async function sendMessage(text,confirmations = [],resumeTaskId = null) {
-  if (busy) return;
+  if (busy || goalStopped()) return;
   const isConfirmation = confirmations.length > 0, isResume = typeof resumeTaskId === 'string';
   const queuedResume = isResume && (chat.tasks || []).some(task => task.id === resumeTaskId && task.status === 'QUEUED');
   const replyTarget = !isConfirmation && !isResume ? chat.replyTarget : null;
@@ -585,6 +644,7 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
   $('message').value = ''; resizeInput(); render(); setBusy(true);
   const pending = addMessage({ role:'assistant',content:isConfirmation ? '正在根据你的决定继续处理…' : '正在思考并处理你的请求…' },true); scrollToLatest();
   const start = performance.now(), controller = new AbortController(), timeout = setTimeout(() => controller.abort(),185000);
+  chatAbortController=controller;
   try {
     const response = await fetch(apiBase + '/chat', { method:'POST',headers:{ 'Content-Type':'application/json','Accept':'application/json' },body:JSON.stringify({ message:text,sessionId:chat.sessionId || chat.id,confirmations,taskReply:replyTarget ? {taskId:replyTarget.taskId,questionId:replyTarget.questionId} : null,resumeTaskId }),signal:controller.signal });
     if (!response.ok) {
@@ -601,7 +661,7 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
     }
     if (isResume) chat.messages.push({role:'user',content:queuedResume ? '领取并执行准备任务' : '继续已接收回答的任务'});
     if (replyTarget) chat.replyTarget = null;
-    chat.multiAgent = data.multiAgent === true; chat.tasks = validTasks(data.tasks || []);
+    chat.multiAgent = data.multiAgent === true; if(!applyOperational(data))throw new Error('目标状态已更新，已忽略旧响应。'); chat.tasks = validTasks(data.tasks || []);
     chat.pendingConfirmations = calls;
     chat.weiboAction = weiboAction;
     chat.messages.push({ role:'assistant',content:data.reply || (calls.length ? '需要你确认以下操作后，才能继续。' : '本次处理已结束。'),elapsed:((performance.now()-start)/1000).toFixed(1) });
@@ -609,10 +669,10 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
     // 失败时保留原输入或输入区的待确认操作，允许修改、重试，不自动批准任何操作。
     if (!isConfirmation && !isResume) { const index = chat.messages.indexOf(userMessage); if (index >= 0) chat.messages.splice(index,1); $('message').value = text; resizeInput(); }
     try { await refreshTasks(true); } catch (_) {}
-    showError(error.name === 'AbortError' ? '等待回复超时。服务端可能仍在处理，请稍候再试。' : error instanceof TypeError ? '暂时无法连接助手。请确认项目已启动、服务地址正确。建议通过 http://localhost:8080 打开本页面。' : error.message);
+    showError(goalStopped() ? '目标已停止，请核对任务状态；已发出的操作仍需核查。' : error.name === 'AbortError' ? (goalStopped() ? '目标已停止，请核对下方任务与待核查操作。' : '等待回复超时。服务端可能仍在处理，请稍候再试。') : error instanceof TypeError ? '暂时无法连接助手。请确认项目已启动、服务地址正确。建议通过 http://localhost:8080 打开本页面。' : error.message);
   } finally {
     if (controlDraft !== null) { $('message').value = controlDraft; resizeInput(); }
-    clearTimeout(timeout); pending.remove(); setBusy(false); save(); render(); if (!chat.pendingConfirmations.length) $('message').focus();
+    clearTimeout(timeout); if(chatAbortController===controller)chatAbortController=null; pending.remove(); setBusy(false); save(); render(); if (!chat.pendingConfirmations.length) $('message').focus();
   }
 }
 $('export').onclick = () => {
