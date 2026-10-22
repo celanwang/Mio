@@ -24,16 +24,24 @@ public class PgEpisodeStore implements EpisodeStore {
     }
 
     @Override
-    public void append(Episode episode) {
+    public AppendResult append(Episode episode) {
         try {
-            jdbc.update("""
+            int inserted = jdbc.update("""
                     INSERT INTO messages(id, session_id, ts, role, text) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT (id) DO NOTHING
                     """, episode.id(), episode.sessionId(), episode.timestamp(),
                     episode.role(), episode.text());
+            if (inserted == 1) return AppendResult.INSERTED;
+            Integer same = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM messages WHERE id = ? AND session_id IS NOT DISTINCT FROM ?
+                    AND role = ? AND text = ?
+                    """, Integer.class, episode.id(), episode.sessionId(), episode.role(), episode.text());
+            if (Integer.valueOf(1).equals(same)) return AppendResult.EXISTING;
+            log.warn("会话消息身份冲突，保留原文且不建立派生索引");
         } catch (Exception e) {
             log.warn("会话消息落库失败（不影响主流程）：{}", e.getMessage());
         }
+        return AppendResult.FAILED;
     }
 
     @Override

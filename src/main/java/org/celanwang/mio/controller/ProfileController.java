@@ -37,7 +37,7 @@ public class ProfileController {
 
     @GetMapping("/profile")
     public List<ProfilePage> profile() {
-        return profileStore.pages();
+        return profileStore.pagesStrict();
     }
 
     /** 手动新增/编辑页面：来源记为 explicit，置信度 1.0；带 id 为整页更新，否则新建。 */
@@ -52,13 +52,20 @@ public class ProfileController {
                 ? request.id().trim() : request.title().trim();
         profileStore.savePage(new ProfilePage(ProfileStore.sanitize(id), request.title().trim(), scope,
                 ProfileStore.SOURCE_EXPLICIT, 1.0, System.currentTimeMillis(), request.content().trim()));
-        return profileStore.pages();
+        return profileStore.pagesStrict();
     }
 
     @DeleteMapping("/profile")
     public List<ProfilePage> remove(@RequestParam String id) {
-        profileStore.deletePage(id);
-        return profileStore.pages();
+        if (!StringUtils.hasText(id)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "id 不能为空。");
+        profileStore.deletePage(ProfileStore.sanitize(id));
+        return profileStore.pagesStrict();
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(org.springframework.dao.DataAccessException.class)
+    public org.springframework.http.ResponseEntity<java.util.Map<String,String>> unavailable() {
+        return org.springframework.http.ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(java.util.Map.of("message", "画像存储暂不可用，请刷新核对后重试。"));
     }
 
     /** 实体簿只读观察接口（消费方在后续阶段接入）。 */

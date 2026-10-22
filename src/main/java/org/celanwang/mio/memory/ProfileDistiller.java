@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.time.Duration;
 
 /**
  * 画像提炼器：用轻量模型把用户显式表达的偏好维护进用户画像（整页改写），
@@ -31,13 +32,14 @@ public class ProfileDistiller {
             - 只记录用户明确表达的偏好（口味/忌口、常用地址、预算、回复风格等），拿不准的不记录；
             - 健康、政治、宗教等敏感主题一律不记录；
             - 已有页面已覆盖的信息不要重复输出；
-            - 更新已有页面时沿用其 slug，content 为整页重写后的完整内容（保留原有有效信息并融入新信息）；
+            - 仅更新 inferred 页面；explicit 人工页面不得覆盖，不得换 slug 重复创建其内容；
+            - 更新已有推断页面时沿用其 slug，content 为整页重写后的完整内容（保留原有有效信息并融入新信息）；
             - 新页面 slug 用简短中文名；scope 默认 global，明确属于某业务领域时填领域名（如 mcd-ordering）；
             - triples 提取对话中出现的实体关系（如 用户-忌口-花生、用户-常用地址-某小区），没有则输出空数组；
             - 没有可记录内容时输出 {"pages":[],"triples":[]}；
             - 只输出严格 JSON，不要输出任何其他内容，格式：
               {"pages":[{"slug":"","title":"","scope":"global","content":"","confidence":0.9}],"triples":[{"subject":"","predicate":"","object":""}]}
-            现有页面（slug | scope | title | content）：
+            现有页面（slug | scope | source | title | content）：
             """;
 
     private final Model fastModel;
@@ -76,17 +78,18 @@ public class ProfileDistiller {
     }
 
     private void doDistill(String userText) throws Exception {
+        var snapshot = profileStore.snapshot();
         StringBuilder pages = new StringBuilder();
-        for (ProfilePage page : profileStore.pages()) {
+        for (ProfilePage page : snapshot.pages()) {
             pages.append(page.id()).append(" | ").append(page.scope()).append(" | ")
-                    .append(page.title()).append(" | ").append(page.content().trim()).append('\n');
+                    .append(page.source()).append(" | ").append(page.title()).append(" | ").append(page.content().trim()).append('\n');
         }
         String prompt = PROMPT + (pages.isEmpty() ? "（空）" : pages.toString())
                 + "\n用户的话：\n" + userText;
 
         var responses = fastModel.stream(List.of(new UserMessage(prompt)), null,
                         GenerateOptions.builder().build())
-                .collectList().block();
+                .collectList().block(Duration.ofSeconds(30));
         if (responses == null || responses.isEmpty()) {
             return;
         }
@@ -102,11 +105,11 @@ public class ProfileDistiller {
             return;
         }
         DistillResult result = objectMapper.readValue(json, DistillResult.class);
-        applyPages(result.pages());
+        applyPages(result.pages(), snapshot);
         applyTriples(result.triples());
     }
 
-    private void applyPages(List<PageOp> ops) {
+    private void applyPages(List<PageOp> ops, ProfileStore.Snapshot snapshot) {
         if (ops == null) {
             return;
         }
@@ -119,9 +122,11 @@ public class ProfileDistiller {
             String scope = StringUtils.hasText(op.scope()) ? op.scope().trim() : ProfileStore.SCOPE_GLOBAL;
             double confidence = op.confidence() == null ? 0.8
                     : Math.max(0.0, Math.min(1.0, op.confidence()));
-            profileStore.savePage(new ProfilePage(ProfileStore.sanitize(slug), op.title().trim(), scope,
-                    ProfileStore.SOURCE_INFERRED, confidence, now, op.content().trim()));
-            log.info("画像页新增/更新：{}（{}）", op.title(), scope);
+            String id = ProfileStore.sanitize(slug);
+            if (profileStore.saveInferred(new ProfilePage(id, op.title().trim(), scope,
+                    ProfileStore.SOURCE_INFERRED, confidence, now, op.content().trim()), snapshot.revisions().get(id))) {
+                log.info("画像页新增/更新：{}（{}）", op.title(), scope);
+            }
         }
     }
 

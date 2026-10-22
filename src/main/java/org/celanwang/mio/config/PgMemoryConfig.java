@@ -96,21 +96,7 @@ public class PgMemoryConfig {
                             source_ts  BIGINT NOT NULL
                         )
                         """);
-                memoryJdbcTemplate.execute("""
-                        CREATE TABLE IF NOT EXISTS profiles (
-                            id              TEXT PRIMARY KEY,
-                            scope           TEXT NOT NULL,
-                            title           TEXT NOT NULL,
-                            source          TEXT NOT NULL,
-                            confidence      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
-                            content         TEXT NOT NULL,
-                            source_messages TEXT[],
-                            created_at      BIGINT,
-                            updated_at      BIGINT NOT NULL
-                        )
-                        """);
-                memoryJdbcTemplate.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope)");
+                org.celanwang.mio.memory.ProfileStore.initializeSchema(memoryJdbcTemplate);
                 memoryJdbcTemplate.execute("""
                         CREATE TABLE IF NOT EXISTS trusts (
                             tool_name        TEXT NOT NULL,

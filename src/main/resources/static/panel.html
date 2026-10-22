@@ -270,12 +270,31 @@ const SOURCE_LABEL = { explicit: '手动/明确', inferred: '系统推断' };
 const AUTOMATION_STATUS_LABEL = { PROPOSED: '待决定', ACTIVE: '已批准', REJECTED: '已拒绝' };
 
 async function renderProfile() {
+  try { await loadProfile(); } catch (_) { profileError('画像读取失败，请稍后刷新重试。'); }
+}
+
+function profileError(message) {
+  document.getElementById('profile-error')?.remove();
+  const error = document.createElement('p');
+  error.id = 'profile-error';
+  error.setAttribute('role', 'alert');
+  error.textContent = message;
+  document.getElementById('profile').prepend(error);
+}
+
+async function profileJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('画像读取失败');
+  return response.json();
+}
+
+async function loadProfile() {
   const box = document.getElementById('profile');
   const [entries, rules, automations, entities] = await Promise.all([
-    fetch('/api/profile').then(r => r.json()),
-    fetch('/api/trust').then(r => r.json()),
-    fetch('/api/automations').then(r => r.json()),
-    fetch('/api/entities').then(r => r.json())
+    profileJson('/api/profile'),
+    profileJson('/api/trust'),
+    profileJson('/api/automations'),
+    profileJson('/api/entities')
   ]);
   let html = '<h2>用户画像（Wiki 页）</h2>';
   if (!entries.length) {
@@ -338,8 +357,11 @@ async function renderProfile() {
 }
 
 async function deleteProfile(id) {
-  await fetch('/api/profile?id=' + id, { method: 'DELETE' });
-  renderProfile();
+  try {
+    const response = await fetch('/api/profile?id=' + id, { method: 'DELETE' });
+    if (!response.ok) throw new Error('画像删除失败');
+    await renderProfile();
+  } catch (_) { profileError('未能确认删除结果，请刷新核对后重试。'); }
 }
 
 async function resetTrust(tool) {

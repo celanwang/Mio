@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts);
 
 -- 2. 对话消息:user/assistant 原文,长期记忆的原始素材
 CREATE TABLE IF NOT EXISTS messages (
-    id         TEXT PRIMARY KEY,           -- role+ts+text 的短 SHA-256 稳定指纹
+    id         TEXT PRIMARY KEY,           -- 新消息为 msg-v2- + SHA-256(session + SDK message id)，历史指纹保留
     session_id TEXT,
     ts         BIGINT NOT NULL,
     role       TEXT NOT NULL,              -- user / assistant
@@ -60,8 +60,12 @@ CREATE TABLE IF NOT EXISTS profiles (
     content         TEXT NOT NULL,         -- Markdown 正文
     source_messages TEXT[],                -- 溯源:证据消息 id 列表(排期:蒸馏器改造时消费)
     created_at      BIGINT,
-    updated_at      BIGINT NOT NULL
+    updated_at      BIGINT NOT NULL,
+    revision        BIGINT NOT NULL DEFAULT 0,
+    deleted_at      BIGINT                  -- 删除标记只保留身份，阻止自动提炼复活页面
 );
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope);
 
 -- 6. 信任统计:只观察统计,不做自动放行;fail-closed,数据只进 PG

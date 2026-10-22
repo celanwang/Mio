@@ -13,6 +13,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.util.HexFormat;
 
 /**
  * 长期记忆挂点：retrieve 注入用户画像，record 落盘会话消息并触发画像提炼。
@@ -30,7 +35,7 @@ public class MioLongTermMemory implements LongTermMemory {
     private final EpisodeRetriever episodeRetriever;
     private final EmbeddingClient embeddingClient;
     private final EpisodeStore episodeStore;
-    /** 已写入 episodes 的消息指纹（record 每次收到全量历史，靠它去重）。 */
+    /** 已确认落库且已接收索引任务的消息身份缓存；持久幂等仍由 PG 保证。 */
     private final Set<String> recentHashes = new LinkedHashSet<>();
 
     public MioLongTermMemory(ProfileDistiller distiller,
@@ -113,7 +118,7 @@ public class MioLongTermMemory implements LongTermMemory {
      * 框架在 Agent 调用后回调（STATIC_CONTROL + asyncRecord）。
      * 注意：AgentScope 2.0.4 的框架回调绑定默认会话，自定义 sessionId 下不会触发，
      * 实际由 ChatService 在每轮调用后用当前会话上下文手动调用 {@link #record(List, String)}；
-     * recentHashes 去重保证不重复写入。
+     * 本地缓存仅优化读取；数据库中的消息身份负责跨重启幂等。
      */
     @Override
     public Mono<Void> record(List<Msg> msgs) {
@@ -122,7 +127,7 @@ public class MioLongTermMemory implements LongTermMemory {
 
     /**
      * 带会话标识的记录入口：ChatService 手动调用时传入当前会话的 sessionId，
-     * 作为 episode 的 session_id 落库（可空，不参与 id 指纹计算）。
+     * 会话标识与 SDK 消息 id 一同构成持久身份。
      */
     public Mono<Void> record(List<Msg> msgs, String sessionId) {
         return Mono.fromRunnable(() -> {
@@ -142,33 +147,62 @@ public class MioLongTermMemory implements LongTermMemory {
                 continue;
             }
             String text = msg.getTextContent();
-            if (!StringUtils.hasText(text) || !markSeen(msg.getRole() + "\n" + text)) {
+            if (!StringUtils.hasText(text) || !StringUtils.hasText(msg.getId())) {
                 continue;
             }
-            if (msg.getRole() == MsgRole.USER) {
+            String id = messageId(sessionId, msg.getId());
+            if (seen(id)) continue;
+            var result = appendEpisode(msg, text, sessionId, id);
+            if (result == EpisodeStore.AppendResult.INSERTED && msg.getRole() == MsgRole.USER) {
                 lastUserText = text;
             }
-            appendEpisode(msg.getRole(), text, sessionId);
         }
         return lastUserText;
     }
 
-    private void appendEpisode(MsgRole role, String text, String sessionId) {
+    private EpisodeStore.AppendResult appendEpisode(Msg msg, String text, String sessionId, String id) {
         try {
-            long timestamp = System.currentTimeMillis();
-            String roleName = role == MsgRole.USER ? "user" : "assistant";
-            String id = EpisodeRetriever.episodeId(roleName, timestamp, text);
-            episodeStore.append(new EpisodeStore.Episode(id, sessionId, timestamp, roleName, text));
-            episodeRetriever.indexAsync(id, roleName, timestamp, text);
+            long timestamp = messageTimestamp(msg);
+            String roleName = msg.getRole() == MsgRole.USER ? "user" : "assistant";
+            var result = episodeStore.append(new EpisodeStore.Episode(id, sessionId, timestamp, roleName, text));
+            if (result == null || result == EpisodeStore.AppendResult.FAILED) return EpisodeStore.AppendResult.FAILED;
+            try {
+                episodeRetriever.indexAsync(id, roleName, timestamp, text);
+                markSeen(id);
+            } catch (RuntimeException unavailable) {
+                log.warn("原文已保存，索引任务未接收；下次记录可补建索引");
+            }
+            return result;
         } catch (Exception e) {
             log.warn("会话消息落盘失败（不影响主流程）：{}", e.getMessage());
+            return EpisodeStore.AppendResult.FAILED;
         }
     }
 
-    private synchronized boolean markSeen(String hash) {
+    static String messageId(String sessionId, String messageId) {
+        try {
+            // Length-prefix the session to distinguish null, empty and embedded delimiters.
+            String session = sessionId == null ? "-1:" : sessionId.length() + ":" + sessionId;
+            return "msg-v2-" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest((session + messageId).getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) {throw new IllegalStateException(impossible);}
+    }
+
+    private static long messageTimestamp(Msg msg) {
+        try {return Instant.parse(msg.getTimestamp()).toEpochMilli();}
+        catch (RuntimeException ignored) {
+            try {return LocalDateTime.parse(msg.getTimestamp(), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"))
+                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();}
+            catch (RuntimeException invalid) {return System.currentTimeMillis();}
+        }
+    }
+
+    private synchronized boolean seen(String id) {return recentHashes.contains(id);}
+
+    private synchronized void markSeen(String hash) {
         if (recentHashes.size() >= MAX_RECENT_HASHES) {
             recentHashes.remove(recentHashes.iterator().next());
         }
-        return recentHashes.add(hash);
+        recentHashes.add(hash);
     }
 }
