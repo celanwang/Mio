@@ -45,6 +45,7 @@ public final class TaskExecution {
     }
     public TaskRecord active(){
         budget.active();var task=store.task(taskId).orElseThrow();
+        if(!Objects.equals(task.executionLease(),budget.lease()))throw new ExecutionLeaseStore.LostLease();
         if(task.status()!=TaskStatus.RUNNING || task.goalRevision()!=goal.revision()
                 || store.goal(task.sessionId()).orElseThrow().revision()!=goal.revision())throw new IllegalStateException("任务已失效或取消");
         var inputs=TaskFacts.bind(store,task,clock.millis());
@@ -74,7 +75,7 @@ public final class TaskExecution {
             throw new IllegalStateException("当前写操作缺少本次人工批准");
         String id=task.id()+":"+call.getId();
         var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scopeKey);
-        store.startOperation(task,operation,clock.millis());return id;
+        budget.fenced(()->{store.startOperation(task,operation,clock.millis());return null;});return id;
     }
     public record ObservationCall(FactObservation observation,FactExtractor extractor) {}
     public synchronized Optional<ObservationCall> observationStarting(ToolUseBlock call){
@@ -85,7 +86,7 @@ public final class TaskExecution {
         var extractor=matches.get(0);
         var observation=new FactObservation(UUID.randomUUID().toString(),extractor.invalidatedKey(call.getName(),call.getInput()).orElseThrow(),
                 extractor.source(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"","",null);
-        store.recordObservation(taskId,observation,true,clock.millis());
+        budget.fenced(()->{store.recordObservation(taskId,observation,true,clock.millis());return null;});
         return Optional.of(new ObservationCall(observation,extractor));
     }
     public synchronized void observationReturned(ObservationCall call,ToolUseBlock tool,String raw,String frameworkState){
@@ -94,7 +95,8 @@ public final class TaskExecution {
             try{value=call.extractor().extract(tool.getName(),tool.getInput(),raw,clock.millis()).orElse(null);}
             catch(RuntimeException invalid){/* The durable invalidation marker remains authoritative. */}
         }
-        store.recordObservation(taskId,call.observation().returned(task,raw,value,clock.millis()),false,clock.millis());
+        var returned=call.observation().returned(task,raw,value,clock.millis());
+        budget.fenced(()->{store.recordObservation(taskId,returned,false,clock.millis());return null;});
     }
     public OperationRecord operation(String id){return store.task(taskId).orElseThrow().operations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow();}
     public synchronized void effectReturned(String id,String output){effectReturned(id,output,"SUCCESS");}

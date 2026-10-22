@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS agent_states (
     session_id TEXT NOT NULL,
     state_key TEXT NOT NULL,
     content TEXT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 0,
     UNIQUE(user_id, session_id, state_key)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_states_session ON agent_states(session_id);
@@ -137,4 +138,14 @@ CREATE TABLE IF NOT EXISTS operation_claims(
     task_id TEXT NOT NULL REFERENCES tasks(id),
     logical_id TEXT NOT NULL UNIQUE,
     PRIMARY KEY(scope_key,operation_id)
+);
+
+-- Existing checkpoint envelopes stay unchanged; legacy rows start at revision zero.
+ALTER TABLE agent_states ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS execution_leases(
+    resource TEXT PRIMARY KEY,
+    owner TEXT,
+    generation BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    session_id TEXT NOT NULL
 );

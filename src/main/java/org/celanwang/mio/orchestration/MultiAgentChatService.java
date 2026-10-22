@@ -19,6 +19,7 @@ public final class MultiAgentChatService {
     private final RunBudget.Limits limits;private final Clock clock;private final TraceStore traces;
     private final MioLongTermMemory memory;private final ProfileStore profiles;
     private final GoalBudgetStore budgetStore;private final GoalBudgetStore.Limits goalLimits;
+    private final ExecutionLeaseStore leases;
     private final Map<String,Object> running=new ConcurrentHashMap<>();
     public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
                                  Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles){
@@ -26,6 +27,12 @@ public final class MultiAgentChatService {
     }
     public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
                                  Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,GoalBudgetStore budgetStore,GoalBudgetStore.Limits goalLimits){
+        this(factory,runtime,registry,limits,clock,traces,memory,profiles,budgetStore,goalLimits,null);
+    }
+    public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
+                                 Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,GoalBudgetStore budgetStore,GoalBudgetStore.Limits goalLimits,ExecutionLeaseStore leases){
+        if(leases!=null&&limits.millis()>895000)throw new IllegalArgumentException("前台单轮执行最长 895000 毫秒");
+        this.leases=leases;
         this.factory=factory;this.runtime=runtime;this.registry=registry;this.limits=limits;this.clock=clock;this.traces=traces;this.memory=memory;this.profiles=profiles;
         this.budgetStore=budgetStore;this.goalLimits=goalLimits;
     }
@@ -34,7 +41,10 @@ public final class MultiAgentChatService {
             String session=request.getSessionId()==null||request.getSessionId().isBlank()?UUID.randomUUID().toString():request.getSessionId();
             Object owner=new Object();if(running.putIfAbsent(session,owner)!=null)return Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,"当前对话正在处理"));
             var budget=new RunBudget(limits,clock);
-            Mono<ChatResponse> result=Mono.defer(()->{
+            Mono<ChatResponse> result=Mono.using(()->{
+                if(leases==null)return Optional.<ExecutionLeaseStore.Token>empty();
+                var token=leases.acquire(session,Math.addExact(limits.millis(),5000));budget.bindLease(leases,token);return Optional.of(token);
+            },held->Mono.defer(()->{
                 boolean decisions=request.getConfirmations()!=null&&!request.getConfirmations().isEmpty();
                 boolean taskReply=request.getTaskReply()!=null;
                 boolean resume=request.getResumeTaskId()!=null;
@@ -56,7 +66,7 @@ public final class MultiAgentChatService {
                     prepare=runtime.answerTask(session,target.taskId(),target.questionId(),request.getMessage(),budget);
                 }
                 else{
-                    runtime.captureUser(session,request.getMessage());
+                    budget.fenced(()->runtime.captureUser(session,request.getMessage()));
                     traces.append(session,"user","user","用户消息",request.getMessage());prepare=Mono.empty();
                 }
                 if(budgetStore!=null)budget.bind(budgetStore,runtime.goal(session).id(),goalLimits,existingGoal);
@@ -80,10 +90,10 @@ public final class MultiAgentChatService {
                         if(memory!=null&&!decisions&&!taskReply&&!resume){
                             var state=agent.getAgentState(context);if(state!=null)memory.record(state.getContext(),session).subscribe();
                         }
-                        return response(session,text);
+                        return budget.fenced(()->response(session,text));
                     });
                 },io.agentscope.core.ReActAgent::close)));
-            }).timeout(Duration.ofMillis(limits.millis()+1000))
+            }).timeout(Duration.ofMillis(limits.millis()+1000)),held->{if(leases!=null)held.ifPresent(leases::release);})
                     .onErrorMap(RunBudget.BudgetExceeded.class,e->new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,e.getMessage()))
                     .onErrorMap(org.springframework.dao.DataAccessException.class,e->new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"协作存储不可用，已停止新的执行"))
                     .onErrorMap(IllegalArgumentException.class,e->new ResponseStatusException(HttpStatus.BAD_REQUEST,e.getMessage()))

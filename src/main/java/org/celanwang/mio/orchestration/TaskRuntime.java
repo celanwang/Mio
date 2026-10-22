@@ -19,6 +19,7 @@ public final class TaskRuntime {
     private final List<OperationVerifier> verifiers;
     private final List<OperationReconciler> reconcilers;
     private final List<FactExtractor> factExtractors;
+    private final ExecutionLeaseStore leases;
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
         this(store,registry,worker,policy,clock,maxTasks,List.of());
@@ -30,10 +31,19 @@ public final class TaskRuntime {
         this(store,registry,worker,policy,clock,maxTasks,verifiers,reconcilers,List.of());
     }
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors){
+        this(store,registry,worker,policy,clock,maxTasks,verifiers,reconcilers,factExtractors,null);
+    }
+    public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,ExecutionLeaseStore leases){
+        this.leases=leases;
         this.factExtractors=List.copyOf(factExtractors);
         this.store=store;this.registry=registry;this.worker=worker;this.policy=policy;this.clock=clock;this.maxTasks=maxTasks;
         this.verifiers=List.copyOf(verifiers);
         this.reconcilers=List.copyOf(reconcilers);
+    }
+    private void requireLease(String session,RunBudget budget){
+        if(leases!=null&&budget.lease()==null)throw new IllegalStateException("领域执行缺少持久会话租约");
+        if(budget.lease()!=null&&!budget.lease().resource().equals(ExecutionLeaseStore.resource(session)))throw new IllegalArgumentException("执行租约不属于当前会话");
+        budget.active();
     }
     public GoalRecord captureUser(String session,String text){
         if(session==null||session.isBlank()||session.length()>200||text==null||text.isBlank()||text.length()>10000)
@@ -55,7 +65,8 @@ public final class TaskRuntime {
     public Optional<GoalRecord> findGoal(String session){return store.goal(session);}
     public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).toList();}
     private TaskRecord recoverInterrupted(TaskRecord task){
-        if(task.status()!=TaskStatus.RUNNING||owners.containsKey(task.id()))return task;
+        if(task.status()!=TaskStatus.RUNNING)return task;
+        if(leases==null?owners.containsKey(task.id()):leases.valid(task.executionLease()))return task;
         var ended=task.next(task.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.FAILED,
                 "上次执行已中断；已提交的操作必须先核查，未提交任务请重新创建",List.of(),task.effectStarted(),clock.millis());
         store.saveTask(task,ended,"task_interrupted");return ended;
@@ -79,7 +90,8 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> submit(String session,TaskSpec spec,RunBudget budget){
         return Mono.defer(()->{
-            var capability=registry.require(spec.capabilityId());capability.validateSpec(spec);var goal=goal(session);var existing=list(session);
+            requireLease(session,budget);
+            var capability=registry.require(spec.capabilityId());capability.validateSpec(spec);var goal=goal(session);var existing=budget.fenced(()->list(session));
             var same=existing.stream().filter(t->t.goalRevision()==goal.revision()&&t.spec().key().equals(spec.key())).findFirst();
             if(same.isPresent()){
                 if(!same.get().spec().equals(spec))throw new IllegalArgumentException("同一任务 key 的参数已改变，请使用新任务或先取消旧任务");
@@ -88,23 +100,23 @@ public final class TaskRuntime {
             registry.status(spec.capabilityId()).requireExecution();
             if(existing.size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");
             for(String dependency:spec.dependencies()){
-                var parent=require(session,dependency);
+                var parent=budget.fenced(()->require(session,dependency));
                 if(!parent.goalId().equals(goal.id())||parent.goalRevision()!=goal.revision())throw new IllegalArgumentException("依赖不属于当前目标版本");
             }
             if(spec.scope()==TaskScope.REQUEST_APPROVAL&&existing.stream().anyMatch(t->t.spec().capabilityId().equals(spec.capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域存在结果不明的提交，请先核查，不创建新的写任务");
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
-                    capability.executionVersion(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());store.createTask(task);
+                    capability.executionVersion(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());budget.fenced(()->{store.createTask(task);return null;});
             return runWhenReady(task,goal,budget);
         });
     }
     private Mono<TaskRecord> runWhenReady(TaskRecord task,GoalRecord goal,RunBudget budget){
         boolean waiting=false;
         for(String id:task.spec().dependencies()){
-            var dependency=require(task.sessionId(),id);
-            if(dependency.invalidation()!=null)return Mono.just(store.invalidateDependencies(task.id(),clock.millis()));
+            var dependency=budget.fenced(()->require(task.sessionId(),id));
+            if(dependency.invalidation()!=null)return Mono.just(budget.fenced(()->store.invalidateDependencies(task.id(),clock.millis())));
             if(dependency.status().terminal()&&dependency.status()!=TaskStatus.COMPLETED){
-                return Mono.just(store.invalidateDependencies(task.id(),clock.millis()));
+                return Mono.just(budget.fenced(()->store.invalidateDependencies(task.id(),clock.millis())));
             }
             if(dependency.status()!=TaskStatus.COMPLETED)waiting=true;
         }
@@ -112,8 +124,9 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> continueTask(String session,String id,RunBudget budget){
         return Mono.defer(()->{
-            var task=require(session,id);var goal=goal(session);
-            if(task.status()==TaskStatus.RUNNING&&!owners.containsKey(id)){
+            requireLease(session,budget);
+            var task=budget.fenced(()->require(session,id));var goal=goal(session);
+            if(task.status()==TaskStatus.RUNNING){
                 return Mono.just(recoverInterrupted(task));
             }
             if(task.status()==TaskStatus.WAITING_DEPENDENCY){
@@ -131,10 +144,11 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> answerTask(String session,String id,String questionId,String text,RunBudget budget){
         return Mono.defer(()->{
-            var task=require(session,id);var goal=goal(session);
+            requireLease(session,budget);
+            var task=budget.fenced(()->require(session,id));var goal=goal(session);
             var ready=task.answered(goal,questionId,text,clock.millis());
             TaskFacts.bind(store,ready,clock.millis());
-            store.saveTask(task,ready,"task_answer_received");
+            budget.fenced(()->{store.saveTask(task,ready,"task_answer_received");return null;});
             return execute(ready,goal,new TaskWorker.Input(false,text,List.of()),budget,Map.of());
         });
     }
@@ -143,6 +157,8 @@ public final class TaskRuntime {
     }
     private Mono<TaskRecord> execute(TaskRecord task,GoalRecord goal,TaskWorker.Input input,RunBudget budget,Map<String,TaskExecution.ApprovalGrant> approved,boolean reserved){
         return Mono.defer(()->{
+            if(leases!=null&&budget.lease()==null)throw new IllegalStateException("领域执行缺少持久会话租约");
+            budget.active();
             Object owner=new Object();if(owners.putIfAbsent(task.id(),owner)!=null)throw new IllegalStateException("任务正在执行");
             try{
                 var current=store.task(task.id()).orElseThrow();
@@ -150,28 +166,28 @@ public final class TaskRuntime {
                 try{registry.status(task.spec().capabilityId()).requireExecution();}
                 catch(CapabilityAvailability.Unavailable unavailable){
                     var failed=current.next(TaskStatus.FAILED,unavailable.getMessage(),List.of(),current.effectStarted(),clock.millis());
-                    store.saveTask(current,failed,"capability_unavailable");owners.remove(task.id(),owner);return Mono.just(failed);
+                    budget.fenced(()->{store.saveTask(current,failed,"capability_unavailable");return null;});owners.remove(task.id(),owner);return Mono.just(failed);
                 }
                 if(!reserved)budget.task();
-                var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
-                store.saveTask(current,running,"task_running");
+                var running=current.start(budget.lease(),clock.millis());
+                budget.fenced(()->{store.saveTask(current,running,"task_running");return null;});
                 var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers,factExtractors,registry.require(task.spec().capabilityId()));
                 return Mono.defer(()->{
                     var bound=new TaskWorker.Input(input.first(),input.userText(),input.decisions(),TaskFacts.bind(store,running,clock.millis()));
                     registry.require(running.spec().capabilityId()).validateInputs(running.spec(),bound.bindings());
                     return worker.run(running,goal,bound,execution);
-                }).map(result->finish(running.id(),result))
-                        .onErrorResume(error->{
+                }).map(result->budget.fenced(()->finish(running.id(),result)))
+                        .onErrorResume(error->Mono.fromSupplier(()->budget.fenced(()->{
                             var latest=store.task(task.id()).orElseThrow();
-                            if(latest.status()!=TaskStatus.RUNNING)return Mono.just(latest);
+                            if(latest.status()!=TaskStatus.RUNNING)return latest;
                             if(error instanceof TaskFacts.InputUnavailable){
                                 var invalid=store.invalidateDependencies(task.id(),clock.millis());
-                                if(invalid.invalidation()!=null)return Mono.just(invalid);
+                                if(invalid.invalidation()!=null)return invalid;
                             }
                             var ended=latest.next(latest.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.FAILED,
                                     error instanceof TaskFacts.InputUnavailable?"任务所需事实不可用："+error.getMessage():"任务执行中断，请核查状态（"+error.getClass().getSimpleName()+"）",List.of(),latest.effectStarted(),clock.millis());
-                            store.saveTask(latest,ended,"task_failed");return Mono.just(ended);
-                        })
+                            store.saveTask(latest,ended,"task_failed");return ended;
+                        })))
                         .doOnSuccess(v->owners.remove(task.id(),owner)).doOnError(e->owners.remove(task.id(),owner))
                         .doFinally(s->owners.remove(task.id(),owner));
             }catch(Throwable e){owners.remove(task.id(),owner);return Mono.error(e);}
@@ -200,8 +216,9 @@ public final class TaskRuntime {
     }
     public Mono<List<TaskRecord>> approve(String session,List<ChatRequest.Confirmation> decisions,RunBudget budget){
         return Mono.defer(()->{
+            requireLease(session,budget);
             if(decisions==null||decisions.isEmpty())throw new IllegalArgumentException("批准结果为空");
-            var tasks=list(session);var index=new HashMap<String,TaskRecord>();
+            var tasks=budget.fenced(()->list(session));var index=new HashMap<String,TaskRecord>();
             tasks.forEach(t->t.approvals().forEach(a->index.put(a.id(),t)));
             var seen=new HashSet<String>();var choices=new LinkedHashMap<String,List<ChatRequest.Confirmation>>();
             for(var choice:decisions){
@@ -213,12 +230,12 @@ public final class TaskRuntime {
                 choices.computeIfAbsent(task.id(),k->new ArrayList<>()).add(choice);
             }
             return reactor.core.publisher.Flux.fromIterable(choices.entrySet()).concatMap(entry->{
-                var task=require(session,entry.getKey());
+                var task=budget.fenced(()->require(session,entry.getKey()));
                 List<PendingApproval> updated=task.approvals().stream().map(a->entry.getValue().stream().filter(c->c.toolCallId().equals(a.id()))
                         .findFirst().map(c->a.decide(c.approved())).orElse(a)).toList();
                 if(updated.stream().allMatch(a->Boolean.FALSE.equals(a.decision()))){
                     var rejected=task.next(TaskStatus.CANCELLED,"已拒绝本任务的操作，未继续执行",updated,false,clock.millis());
-                    store.saveTask(task,rejected,"approval_rejected");return Mono.just(rejected);
+                    budget.fenced(()->{store.saveTask(task,rejected,"approval_rejected");return null;});return Mono.just(rejected);
                 }
                 boolean complete=updated.stream().noneMatch(a->a.decision()==null);
                 if(complete){
@@ -226,7 +243,7 @@ public final class TaskRuntime {
                     registry.require(task.spec().capabilityId()).validateInputs(task.spec(),TaskFacts.bind(store,task,clock.millis()));
                     budget.task();
                 }
-                var saved=task.next(TaskStatus.AWAITING_APPROVAL,task.reply(),updated,false,clock.millis());store.saveTask(task,saved,"approval_recorded");
+                var saved=task.next(TaskStatus.AWAITING_APPROVAL,task.reply(),updated,false,clock.millis());budget.fenced(()->{store.saveTask(task,saved,"approval_recorded");return null;});
                 if(!complete)return Mono.just(saved);
                 var calls=updated.stream().map(a->new ChatRequest.Confirmation(a.callId(),a.decision())).toList();
                 var approved=new HashMap<String,TaskExecution.ApprovalGrant>();updated.stream().filter(a->Boolean.TRUE.equals(a.decision()))
@@ -243,7 +260,8 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> reconcile(String session,String taskId,String operationId,RunBudget budget){
         return Mono.defer(()->{
-            var task=require(session,taskId);
+            requireLease(session,budget);
+            var task=budget.fenced(()->require(session,taskId));
             if(task.status()==TaskStatus.RUNNING||!task.effectStarted())throw new IllegalStateException("操作仍在执行或尚未提交，不能核查");
             var op=task.operations().stream().filter(o->o.id().equals(operationId)).findFirst().orElseThrow(()->new IllegalArgumentException("操作不存在"));
             var adapter=reconcilers.stream().filter(r->r.supports(op)).findFirst().orElseThrow(()->new IllegalStateException("该操作暂无可信关联核查能力，禁止重发"));

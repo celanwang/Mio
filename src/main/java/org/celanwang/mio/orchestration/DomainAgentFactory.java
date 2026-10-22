@@ -72,7 +72,8 @@ public final class DomainAgentFactory implements TaskWorker {
             DomainDefinition definition=definitions.get(task.spec().capabilityId());
             if(definition==null)throw new IllegalArgumentException("领域不可用");
             definition.checkAvailability().requireExecution();
-            if(!input.first()&&states.get(null,task.childSessionId(),"agent_state",io.agentscope.core.state.AgentState.class).isEmpty())
+            var stateStore=FencedAgentStateStore.scope(states,execution.budget(),task.childSessionId());
+            if(!input.first()&&stateStore.get(null,task.childSessionId(),"agent_state",io.agentscope.core.state.AgentState.class).isEmpty())
                 throw new IllegalStateException("领域检查点缺失，不能安全恢复");
             if(definition.tools().get().isEmpty())throw new IllegalStateException("领域业务工具尚未接入");
             Toolkit tools=new Toolkit();refresh(tools,definition,execution);
@@ -86,7 +87,7 @@ public final class DomainAgentFactory implements TaskWorker {
                     不重复提交写操作；工具超时或结果不明时先核查。人工批准仅适用于当前调用。
                     """+"\n任务允许范围："+task.spec().scope()+"\n"+definition.prompt()+"\n"+profile(definition.capability().skill());
             var builder=ReActAgent.builder().name(definition.capability().name()).sysPrompt(prompt)
-                    .model(new BudgetedModel(models.apply(definition.capability()),execution.budget())).toolkit(tools).stateStore(states)
+                    .model(new BudgetedModel(models.apply(definition.capability()),execution.budget())).toolkit(tools).stateStore(stateStore)
                     .permissionContext(policy.permissionContext()).maxIters(12)
                     .generateOptions(GenerateOptions.builder().maxTokens(2048).build())
                     .hook(new UntrustedContentHook()).hook(new DomainLifecycleHook(execution))
@@ -98,7 +99,7 @@ public final class DomainAgentFactory implements TaskWorker {
         },agent->{
             ChatService service=new ChatService(agent,weibo,jev,threshold,agent.getModel().getModelName(),"jev-latest",traces,trust,
                     policy,memory,habits,json,new ChatExecutionOptions(task.trustedIntent(goal),false,()->{
-                        execution.budget().model(0);
+                        execution.businessActive();execution.budget().model(0);
                     }));
             var request=new ChatRequest();request.setSessionId(task.childSessionId());
             if(!input.decisions().isEmpty())request.setConfirmations(input.decisions());

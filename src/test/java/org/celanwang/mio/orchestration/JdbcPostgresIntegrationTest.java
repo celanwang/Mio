@@ -197,6 +197,118 @@ class JdbcPostgresIntegrationTest {
         assertThat(timed.task(leaf.id()).orElseThrow().effectStarted()).isFalse();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='operation_started'",Integer.class)).isZero();
     }
+    private JdbcExecutionLeaseStore leases(){var leases=new JdbcExecutionLeaseStore(jdbc,jdbc.getDataSource());leases.initialize();return leases;}
+    @Test void independentLeaseStoresAllowOnlyOneOwnerAndFencingRollsBackExpiredWrites()throws Exception{
+        var first=leases();var second=leases();var barrier=new CyclicBarrier(2);var winners=new java.util.concurrent.CopyOnWriteArrayList<ExecutionLeaseStore.Token>();
+        var pool=Executors.newFixedThreadPool(2);
+        try{
+            var jobs=List.of(first,second).stream().map(leases->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);try{winners.add(leases.acquire("root",10000));}catch(ExecutionLeaseStore.Busy busy){}return true;})).toList();
+            for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        assertThat(winners).hasSize(1);var token=winners.get(0);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='lease_acquired'",Integer.class)).isEqualTo(1);
+        assertThatThrownBy(()->first.fenced(token,()->{jdbc.update("UPDATE execution_leases SET expires_at=0 WHERE resource=?",token.resource());jdbc.update("UPDATE goals SET revision=99 WHERE id='g'");return true;})).isInstanceOf(ExecutionLeaseStore.LostLease.class);
+        assertThat(jdbc.queryForObject("SELECT revision FROM goals WHERE id='g'",Long.class)).isEqualTo(1);assertThat(first.valid(token)).isTrue();
+        jdbc.update("UPDATE execution_leases SET expires_at=0 WHERE resource=?",token.resource());var replacement=second.acquire("root",10000);
+        assertThat(replacement.generation()).isGreaterThan(token.generation());first.release(token);assertThat(second.valid(replacement)).isTrue();
+        assertThatThrownBy(()->first.fenced(token,()->{throw new AssertionError("stale owner must not run");})).isInstanceOf(ExecutionLeaseStore.LostLease.class);
+        second.release(replacement);assertThat(second.valid(replacement)).isFalse();
+    }
+    @Test void leaseAuditFailureRollsBackAcquisitionAndRelease(){
+        var leases=leases();jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_lease CHECK(type <> 'lease_acquired')");
+        assertThatThrownBy(()->leases.acquire("root",10000)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM execution_leases",Integer.class)).isZero();jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_lease");
+        var token=leases.acquire("root",10000);jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_release CHECK(type <> 'lease_released')");
+        assertThatThrownBy(()->leases.release(token)).isInstanceOf(org.springframework.dao.DataAccessException.class);assertThat(leases.valid(token)).isTrue();
+    }
+    @Test void nativeSdkCheckpointCasRejectsStaleWritersAndMigratesVersionZeroRows(){
+        var states=new JdbcAgentStateStore(jdbc,new ObjectMapper());states.initialize();
+        var a=AgentState.builder().sessionId("checkpoint").context(List.of(new UserMessage("first"))).build();
+        var b=AgentState.builder().sessionId("checkpoint").context(List.of(new UserMessage("second"))).build();
+        assertThat(states.getVersioned(null,"checkpoint","agent_state",AgentState.class).version()).isZero();
+        assertThat(states.saveIfVersion(null,"checkpoint","agent_state",a,0)).isEqualTo(1);
+        var other=new JdbcAgentStateStore(jdbc,new ObjectMapper());assertThat(other.getVersioned(null,"checkpoint","agent_state",AgentState.class).version()).isEqualTo(1);
+        assertThat(other.saveIfVersion(null,"checkpoint","agent_state",b,1)).isEqualTo(2);
+        assertThat(states.saveIfVersion(null,"checkpoint","agent_state",a,1)).isEqualTo(io.agentscope.core.state.AgentStateStore.UNVERSIONED);
+        assertThat(states.saveIfVersion(null,"missing","agent_state",a,7)).isEqualTo(io.agentscope.core.state.AgentStateStore.UNVERSIONED);assertThat(states.exists(null,"missing")).isFalse();
+        jdbc.update("UPDATE agent_states SET revision=0 WHERE session_id='checkpoint'");states.initialize();
+        assertThat(states.saveIfVersion(null,"checkpoint","agent_state",b,0)).isEqualTo(1);
+        var leases=leases();var old=leases.acquire("root",10000);var budget=new RunBudget(new RunBudget.Limits(10,10,10,10000,10000,20000),java.time.Clock.systemUTC());budget.bindLease(leases,old);
+        var scoped=FencedAgentStateStore.scope(states,budget,"checkpoint");jdbc.update("UPDATE execution_leases SET expires_at=0 WHERE resource=?",old.resource());var current=leases.acquire("root",10000);
+        assertThatThrownBy(()->scoped.saveIfVersion(null,"checkpoint","agent_state",a,1)).isInstanceOf(ExecutionLeaseStore.LostLease.class);
+        assertThat(states.get(null,"checkpoint","agent_state",AgentState.class).orElseThrow().getContext().get(0).getTextContent()).isEqualTo("second");leases.release(current);
+        assertThat(states.saveIfVersion(null,"checkpoint","agent_state",b,io.agentscope.core.state.AgentStateStore.UNVERSIONED)).isEqualTo(2);
+        jdbc.update("UPDATE agent_states SET revision=-2 WHERE session_id='checkpoint'");
+        assertThatThrownBy(()->states.getVersioned(null,"checkpoint","agent_state",AgentState.class)).isInstanceOf(IllegalStateException.class);
+    }
+    @Test void independentRuntimesDoNotRecoverLiveTasksButAnOldOwnerCannotCompleteAfterTakeover(){
+        var leases=leases();var token=leases.acquire("root",10000);
+        var budget=new RunBudget(new RunBudget.Limits(20,20,20,10000,10000,20000),java.time.Clock.systemUTC());budget.bindLease(leases,token);
+        var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","desc","s","v1",List.of())));var policy=new org.celanwang.mio.security.PolicyEngine("shadow");
+        var sink=reactor.core.publisher.Sinks.<TaskWorker.Result>one();var errors=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var first=new TaskRuntime(store,registry,(t,g,i,e)->sink.asMono(),policy,java.time.Clock.systemUTC(),16,List.of(),List.of(),List.of(),leases);
+        var second=new TaskRuntime(new JdbcCoordinationStore(jdbc,jdbc.getDataSource(),new ObjectMapper()),registry,(t,g,i,e)->{throw new AssertionError("must not replay");},policy,java.time.Clock.systemUTC(),16,List.of(),List.of(),List.of(),leases());
+        var subscription=first.submit("root",new TaskSpec("live","domain","prepare",null,null,TaskScope.PREPARE),budget).subscribe(v->{},errors::set);
+        var running=second.list("root").get(0);assertThat(running.status()).isEqualTo(TaskStatus.RUNNING);
+        jdbc.update("UPDATE execution_leases SET expires_at=0 WHERE resource=?",token.resource());var replacement=leases.acquire("root",10000);
+        assertThat(second.list("root").get(0).status()).isEqualTo(TaskStatus.FAILED);sink.tryEmitValue(new TaskWorker.Result("late success",false,List.of(),null));
+        assertThat(errors.get()).isInstanceOf(ExecutionLeaseStore.LostLease.class);assertThat(store.task(running.id()).orElseThrow().reply()).doesNotContain("late success");
+        leases.release(token);assertThat(leases.valid(replacement)).isTrue();leases.release(replacement);subscription.dispose();
+    }
+    @Test void actualSdkSupervisorUsesFencedNativeCasAndRestoresAcrossForegroundRuns(){
+        var leases=leases();var states=new JdbcAgentStateStore(jdbc,new ObjectMapper());states.initialize();
+        var model=org.mockito.Mockito.mock(io.agentscope.core.model.Model.class);
+        org.mockito.Mockito.when(model.getModelName()).thenReturn("fake-root");
+        org.mockito.Mockito.when(model.stream(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenReturn(reactor.core.publisher.Flux.just(
+                io.agentscope.core.model.ChatResponse.builder().content(List.of(io.agentscope.core.message.TextBlock.builder().text("hello").build()))
+                        .usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(5).outputTokens(3).build()).build()));
+        var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","desc","s","v1",List.of())));
+        var runtime=new TaskRuntime(store,registry,(t,g,i,e)->{throw new AssertionError("chat must not delegate");},new org.celanwang.mio.security.PolicyEngine("shadow"),java.time.Clock.systemUTC(),16,List.of(),List.of(),List.of(),leases);
+        var service=new MultiAgentChatService(new SupervisorFactory(model,states,registry,runtime,new ObjectMapper()),runtime,registry,new RunBudget.Limits(20,20,20,10000,10000,20000),
+                java.time.Clock.systemUTC(),new org.celanwang.mio.trace.TraceStore((session,event)->{}),null,null,null,null,leases);
+        var request=new org.celanwang.mio.model.dto.ChatRequest();request.setSessionId("root");request.setMessage("hello");
+        assertThat(service.chat(request).block(java.time.Duration.ofSeconds(10)).getReply()).isEqualTo("hello");
+        assertThat(service.chat(request).block(java.time.Duration.ofSeconds(10)).getReply()).isEqualTo("hello");
+        var checkpoint=states.getVersioned(null,"root:supervisor","agent_state",AgentState.class);
+        assertThat(checkpoint.version()).isGreaterThanOrEqualTo(2);assertThat(checkpoint.value().getContext()).hasSizeGreaterThanOrEqualTo(4);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='lease_released'",Integer.class)).isEqualTo(2);
+    }
+    @Test void actualDomainQuestionResumesItsCheckpointUnderANewForegroundGeneration()throws Exception{
+        var leases=leases();var states=new JdbcAgentStateStore(jdbc,new ObjectMapper());states.initialize();var json=new ObjectMapper();
+        var cap=new AgentCapability("domain","domain","desc","s","v1",List.of());var registry=new AgentRegistry(List.of(cap));
+        var rootScript=new ArrayDeque<List<io.agentscope.core.message.ContentBlock>>();var childScript=new ArrayDeque<List<io.agentscope.core.message.ContentBlock>>();
+        rootScript.add(scriptedCall(json,"delegate_task",Map.of("key","question","capabilityId","domain","objective","确认地点")));
+        rootScript.add(List.of(io.agentscope.core.message.TextBlock.builder().text("请回答任务问题").build()));rootScript.add(List.of(io.agentscope.core.message.TextBlock.builder().text("已完成").build()));
+        childScript.add(scriptedCall(json,"mio_request_input",Map.of("text","具体地点？")));childScript.add(scriptedCall(json,"mio_finish_task",Map.of("text","按回答处理完成")));
+        var rootModel=scriptedModel(rootScript);var childModel=scriptedModel(childScript);var policy=new org.celanwang.mio.security.PolicyEngine("shadow");
+        var dummy=new io.agentscope.core.tool.ToolBase(io.agentscope.core.tool.ToolBase.builder().name("query").description("synthetic read").readOnly(true).inputSchema(Map.of())){};
+        var profiles=org.mockito.Mockito.mock(org.celanwang.mio.memory.ProfileStore.class);org.mockito.Mockito.when(profiles.pages()).thenReturn(List.of());org.mockito.Mockito.when(profiles.render(org.mockito.ArgumentMatchers.anyList())).thenReturn("");
+        @SuppressWarnings("unchecked") org.springframework.beans.factory.ObjectProvider<io.agentscope.extensions.judge.jev.JevClient> jev=org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        var factory=new DomainAgentFactory(List.of(new DomainDefinition(cap,"test domain",()->List.of(dummy))),c->childModel,states,null,policy,
+                org.mockito.Mockito.mock(org.celanwang.mio.service.WeiboMcpService.class),jev,.8,new org.celanwang.mio.trace.TraceStore((session,event)->{}),
+                org.mockito.Mockito.mock(org.celanwang.mio.memory.TrustStore.class),org.mockito.Mockito.mock(org.celanwang.mio.memory.MioLongTermMemory.class),org.mockito.Mockito.mock(org.celanwang.mio.memory.HabitDetector.class),profiles,json);
+        var runtime=new TaskRuntime(store,registry,factory,policy,java.time.Clock.systemUTC(),16,List.of(),List.of(),List.of(),leases);
+        var service=new MultiAgentChatService(new SupervisorFactory(rootModel,states,registry,runtime,json),runtime,registry,new RunBudget.Limits(30,30,20,10000,10000,20000),java.time.Clock.systemUTC(),
+                new org.celanwang.mio.trace.TraceStore((session,event)->{}),null,null,null,null,leases);
+        var request=new org.celanwang.mio.model.dto.ChatRequest();request.setSessionId("root");request.setMessage("按明确需求准备，不下单");
+        var first=service.chat(request).block(java.time.Duration.ofSeconds(10));assertThat(first.getTasks()).hasSize(1);var task=store.tasks("root").get(0);assertThat(task.status()).isEqualTo(TaskStatus.NEEDS_INPUT);
+        var firstGeneration=task.executionLease().generation();var goal=runtime.goal("root");
+        var answer=new org.celanwang.mio.model.dto.ChatRequest();answer.setSessionId("root");answer.setMessage("上海虹桥站");answer.setTaskReply(new org.celanwang.mio.model.dto.ChatRequest.TaskReply(task.id(),task.questionId()));
+        var second=service.chat(answer).block(java.time.Duration.ofSeconds(10));assertThat(second.getTasks().get(0).status()).isEqualTo(TaskStatus.COMPLETED);
+        var restored=store.task(task.id()).orElseThrow();assertThat(restored.executionLease().generation()).isGreaterThan(firstGeneration);assertThat(restored.answers()).hasSize(1);
+        assertThat(runtime.goal("root")).isEqualTo(goal);assertThat(states.getVersioned(null,task.childSessionId(),"agent_state",AgentState.class).version()).isGreaterThanOrEqualTo(2);
+        assertThat(restored.operations()).isEmpty();assertThat(rootScript).isEmpty();assertThat(childScript).isEmpty();
+    }
+    private List<io.agentscope.core.message.ContentBlock> scriptedCall(ObjectMapper json,String name,Map<String,Object> args)throws Exception{
+        return List.of(io.agentscope.core.message.ToolUseBlock.builder().id(UUID.randomUUID().toString()).name(name).input(args).content(json.writeValueAsString(args)).build());
+    }
+    private io.agentscope.core.model.Model scriptedModel(Deque<List<io.agentscope.core.message.ContentBlock>> script){
+        var model=org.mockito.Mockito.mock(io.agentscope.core.model.Model.class);org.mockito.Mockito.when(model.getModelName()).thenReturn("fake-model");
+        org.mockito.Mockito.when(model.stream(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenAnswer(inv->reactor.core.publisher.Flux.defer(()->{
+            if(script.isEmpty())return reactor.core.publisher.Flux.error(new IllegalStateException("script exhausted"));
+            return reactor.core.publisher.Flux.just(io.agentscope.core.model.ChatResponse.builder().content(script.removeFirst()).usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(5).outputTokens(3).build()).build());
+        }));return model;
+    }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
     @Test void unresolvedCredentialScopeBlocksOtherSessionsAndReleasesOnlyWithEvidence(){
         String scope="b".repeat(64);var a=task("a");store.createTask(a);

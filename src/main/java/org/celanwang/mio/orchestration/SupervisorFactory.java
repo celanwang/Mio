@@ -20,7 +20,7 @@ public final class SupervisorFactory {
         var toolkit=new Toolkit();
         for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan"))
             toolkit.registerAgentTool(new OrchestrationTool(name,session,runtime,registry,budget,json));
-        return ReActAgent.builder().name("Mio 主助手").model(new BudgetedModel(model,budget)).toolkit(toolkit).stateStore(states)
+        return ReActAgent.builder().name("Mio 主助手").model(new BudgetedModel(model,budget)).toolkit(toolkit).stateStore(FencedAgentStateStore.scope(states,budget,session+":supervisor"))
                 .permissionContext(PermissionContextState.builder().mode(PermissionMode.DEFAULT).build())
                 .hook(new UntrustedContentHook()).maxIters(12).generateOptions(GenerateOptions.builder().maxTokens(2048).build())
                 .sysPrompt("""

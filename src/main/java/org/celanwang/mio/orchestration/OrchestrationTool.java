@@ -45,12 +45,12 @@ final class OrchestrationTool extends ToolBase {
         return Mono.defer(()->{
             budget.tool();Map<String,Object> input=call.getInput();
             Mono<?> result=switch(operation){
-                case "review_plan"->Mono.just(runtime.reviewPlan(session));
+                case "review_plan"->Mono.just(budget.fenced(()->runtime.reviewPlan(session)));
                 case "discover_agents"->Mono.just(registry.discover());
-                case "list_tasks"->Mono.just(runtime.list(session).stream().map(t->TaskSummary.of(t,registry)).toList());
+                case "list_tasks"->Mono.just(budget.fenced(()->runtime.list(session).stream().map(t->TaskSummary.of(t,registry)).toList()));
                 case "delegate_task"->runtime.submit(session,json.convertValue(input,TaskSpec.class),budget).map(t->TaskSummary.of(t,registry));
                 case "continue_task"->runtime.continueTask(session,(String)input.get("taskId"),budget).map(t->TaskSummary.of(t,registry));
-                case "cancel_task"->Mono.fromSupplier(()->TaskSummary.of(runtime.cancel(session,(String)input.get("taskId")),registry));
+                case "cancel_task"->Mono.fromSupplier(()->budget.fenced(()->TaskSummary.of(runtime.cancel(session,(String)input.get("taskId")),registry)));
                 case "reconcile_operation"->runtime.reconcile(session,(String)input.get("taskId"),(String)input.get("operationId"),budget).map(t->TaskSummary.of(t,registry));
                 default->Mono.error(new IllegalArgumentException("未知任务管理操作"));
             };
