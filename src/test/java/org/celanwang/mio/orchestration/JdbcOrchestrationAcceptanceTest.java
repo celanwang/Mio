@@ -31,7 +31,7 @@ class JdbcOrchestrationAcceptanceTest {
     JdbcTemplate admin,jdbc;javax.sql.DataSource source;String schema;
     final ObjectMapper json=new ObjectMapper();final Clock clock=Clock.systemUTC();
     JdbcCoordinationStore store;JdbcAgentStateStore states;JdbcExecutionLeaseStore leases;JdbcTaskQueue queue;JdbcGoalBudgetStore budgets;
-    ProfileStore profiles;MioLongTermMemory memory;TraceStore traces;AgentRegistry registry;TaskRuntime runtime;MultiAgentChatService chat;
+    ProfileStore profiles;MioLongTermMemory memory;TraceStore traces;AgentRegistry registry;TaskRuntime runtime;MultiAgentChatService chat;JdbcGoalAcceptance acceptance;
     final AtomicInteger rootCalls=new AtomicInteger(),quoteCalls=new AtomicInteger(),actionCalls=new AtomicInteger(),reads=new AtomicInteger(),writes=new AtomicInteger();
     final Map<String,String> providerState=new LinkedHashMap<>();final Model backgroundModel=mock(Model.class);
     final String intent="先查询并分析报价，再准备创建操作；本次写入必须等待我确认。";
@@ -53,6 +53,7 @@ class JdbcOrchestrationAcceptanceTest {
         var quote=new AgentCapability("quote-domain","报价能力","只准备报价","quote-skill","v1",List.of(),List.of(),List.of(CapabilityOutputContract.report(),CapabilityOutputContract.rideQuote()));
         var action=new AgentCapability("action-domain","执行能力","分析或经批准执行","action-skill","v1",List.of(),CapabilityInputContract.contextual(),List.of(CapabilityOutputContract.report(),CapabilityOutputContract.resourceReference()));
         registry=new AgentRegistry(List.of(quote,action));
+        acceptance=new JdbcGoalAcceptance(jdbc,source,store,registry,json,clock);acceptance.initialize();
         var quoteModel=scripted("quote-script",()->switch(quoteCalls.getAndIncrement()) {
             case 0->tool("query-meals",Map.of());case 1->tool("mio_finish_task",Map.of("text","已取得可信报价"));default->throw new AssertionError("unexpected quote call");
         });
@@ -96,7 +97,7 @@ class JdbcOrchestrationAcceptanceTest {
                         "inputs",List.of(Map.of("taskId",parent.id(),"factId",fact.id(),"version",fact.version(),"alias","rideQuote"))));}
             case 3->tool("delegate_task",Map.of("key","create","capabilityId","action-domain","objective","准备经人工确认的创建操作","scope","REQUEST_APPROVAL","dependencies",List.of(byKey("analysis").id()),"outputContract","resource-reference"));
             case 4->TextBlock.builder().text("准备已完成，请确认创建操作").build();
-            case 5->tool("list_tasks",Map.of());
+            case 5->tool("read_goal_acceptance",Map.of());
             case 6->TextBlock.builder().text(writes.get()==1?"资源创建已核实，后续履约未验证":"操作未执行，输出契约未满足").build();
             default->throw new AssertionError("unexpected supervisor call");
         };
@@ -110,7 +111,7 @@ class JdbcOrchestrationAcceptanceTest {
             }
         };
     }
-    MultiAgentChatService service(Model model){return new MultiAgentChatService(new SupervisorFactory(model,states,registry,runtime,json),runtime,registry,new RunBudget.Limits(50,100,20,100000,100000,20000),clock,traces,memory,profiles,budgets,new GoalBudgetStore.Limits(100,200,50,200000),leases);}
+    MultiAgentChatService service(Model model){return new MultiAgentChatService(new SupervisorFactory(model,states,registry,runtime,json,acceptance),runtime,registry,new RunBudget.Limits(50,100,20,100000,100000,20000),clock,traces,memory,profiles,budgets,new GoalBudgetStore.Limits(100,200,50,200000),leases,acceptance);}
 
     @Test void approvedWorkflowPersistsBothAgentLoopsEvidenceBudgetAndOnlyRealUserMemory(){runWorkflow(true);}
     @Test void rejectedWorkflowCannotCreateResourcesOrPassTheEvidenceContract(){runWorkflow(false);}
@@ -120,12 +121,22 @@ class JdbcOrchestrationAcceptanceTest {
         assertThat(pending.getPendingConfirmations()).hasSize(1);assertThat(reads.get()).isEqualTo(1);assertThat(writes.get()).isZero();assertThat(providerState).isEmpty();
         assertThat(pending.getTasks()).hasSize(3);assertThat(runtime.summary(byKey("quote")).resultAssessment().state()).isEqualTo(TaskResultAssessment.State.VERIFIED);
         assertThat(runtime.summary(byKey("analysis")).resultAssessment().state()).isEqualTo(TaskResultAssessment.State.EXECUTION_ONLY);
+        assertThat(pending.getAcceptance().state()).isEqualTo(GoalAcceptanceView.State.NOT_DEFINED);
+        var goal=runtime.goal("root");
+        var selections=pending.getAcceptance().candidates().stream().map(c->new GoalAcceptance.Selection(c.taskId(),c.contractVersion(),c.contractId().equals("ride-quote")?
+                List.of(new GoalAcceptance.Check("durationSeconds",GoalAcceptance.Operator.LTE,"900")):List.of())).toList();
+        var afterCriteria=new org.celanwang.mio.controller.TaskController(runtime,chat,new JdbcGoalLifecycle(jdbc,source,store,queue),acceptance)
+                .acceptance(new GoalAcceptance.Request("root",goal.revision(),goal.controlRevision(),0L,selections));
+        assertThat(afterCriteria.getAcceptance().state()).isEqualTo(GoalAcceptanceView.State.PARTIALLY_SATISFIED);
+        assertThat(afterCriteria.getBudget()).isEqualTo(pending.getBudget());assertThat(afterCriteria.getPendingConfirmations()).isEqualTo(pending.getPendingConfirmations());
+        assertThat(runtime.goal("root")).isEqualTo(goal);assertThat(writes.get()).isZero();assertThat(rootCalls.get()).isEqualTo(5);
         var confirmation=new ChatRequest();confirmation.setSessionId("root");confirmation.setConfirmations(List.of(new ChatRequest.Confirmation(pending.getPendingConfirmations().get(0).toolCallId(),approve)));
         var response=chat.chat(confirmation).block(Duration.ofSeconds(15));
         assertThat(response.getPendingConfirmations()).isEmpty();assertThat(writes.get()).isEqualTo(approve?1:0);
         assertThat(providerState).isEqualTo(approve?Map.of("resource-1","CREATED"):Map.of());
         var result=runtime.summary(byKey("create"));assertThat(result.status()).isEqualTo(approve?TaskStatus.COMPLETED:TaskStatus.CANCELLED);
         assertThat(result.resultAssessment().state()).isEqualTo(approve?TaskResultAssessment.State.VERIFIED:TaskResultAssessment.State.NOT_FINISHED);
+        assertThat(response.getAcceptance().state()).isEqualTo(approve?GoalAcceptanceView.State.SATISFIED:GoalAcceptanceView.State.PARTIALLY_SATISFIED);
         assertThat(rootCalls.get()).isEqualTo(7);assertThat(quoteCalls.get()).isEqualTo(2);assertThat(actionCalls.get()).isEqualTo(approve?3:2);
         int models=approve?12:11;
         assertThat(response.getBudget().models()).isEqualTo(models);assertThat(response.getBudget().knownTokens()).isEqualTo(models*8L);assertThat(response.getBudget().usageComplete()).isTrue();
@@ -134,6 +145,7 @@ class JdbcOrchestrationAcceptanceTest {
         assertThat(remembered).extracting(EpisodeStore.Episode::text).contains(intent).doesNotContain("分析报价","取得可信报价");verifyNoInteractions(backgroundModel);
         var noModel=mock(Model.class);var restored=service(noModel).response("root","");
         assertThat(restored.getBudget()).isEqualTo(response.getBudget());assertThat(restored.getTasks()).hasSize(3);verifyNoInteractions(noModel);
+        assertThat(restored.getAcceptance().confirmed()).isEqualTo(response.getAcceptance().confirmed());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='budget_settled'",Integer.class)).isEqualTo(models);
     }
 }

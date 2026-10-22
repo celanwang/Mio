@@ -8,7 +8,7 @@
 ./scripts/mvn.sh -B verify
 ```
 
-Java 17，Maven 3.6.3+；macOS 可自动使用 IntelliJ 自带 Maven。所有默认测试都是普通 JUnit，不启动 Spring、不加载 `.env`，不连接模型、MCP、PG、微博或打车进程。评测通过本机命令执行。报告落在 gitignore 的 `target/`，不会把真实用户对话提交到仓库。
+Java 17，Maven 3.6.3+；macOS 可自动使用 IntelliJ 自带 Maven。默认 Java 测试不启动真实业务、不加载 `.env`、不连接模型、MCP、PG、微博或打车进程；显式实库入口使用隔离测试库。完整评测还需 Python 3 与 Node.js 18+，客户端模块检查由 Python 测试调用 Node 内置测试器，可用 MIO_NODE_PROGRAM 指定 Node 可执行文件。报告落在 gitignore 的 `target/`，不会把真实用户对话提交到仓库。
 
 ## 交付分期
 
@@ -111,6 +111,6 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 
 ## 受控预览收尾验收
 
-`./scripts/eval-postgres.sh` 在原设施门禁之后生成 `target/evaluation/acceptance.json` 和 `acceptance.md`。同次运行编号和源码指纹用于排除旧报告；持久化、队列、目标生命周期、记忆一致性及完整前台编排 PG 套件必须执行且零跳过。未提供测试库时 `./scripts/eval.sh` 仍可验证本地设施，收尾状态为 POSTGRES_REQUIRED。开始新运行会先清除旧成功结论，未完成不能沿用旧结果。消息幂等、人工画像保护与删除语义见 [记忆一致性说明](../memory-consistency.md)，实际覆盖链路见 [完整编排验收](../multi-agent/orchestration-acceptance.md)。
+`./scripts/eval-postgres.sh` 在原设施门禁之后生成 `target/evaluation/acceptance.json` 和 `acceptance.md`。同次运行编号和源码指纹用于排除旧报告；持久化、队列、目标生命周期、记忆一致性、完整前台编排及目标验收 PG 套件必须执行且零跳过。未提供测试库时 `./scripts/eval.sh` 仍可验证本地设施，收尾状态为 POSTGRES_REQUIRED。开始新运行会先清除旧成功结论，未完成不能沿用旧结果。消息幂等、人工画像保护与删除语义见 [记忆一致性说明](../memory-consistency.md)，实际覆盖链路见 [完整编排验收](../multi-agent/orchestration-acceptance.md)与[目标级验收](../multi-agent/goal-acceptance.md)。
 
 OFFLINE_COMPLETE 只说明受控前台工程边界通过本次离线验收。固定剧本仍不能晋升，真实模型、供应商回执覆盖、跨主机与后台自治的资格证据不由该状态推导。操作与扩展边界见 [Multi-Agent 收尾文档](../multi-agent/closure.md)。
