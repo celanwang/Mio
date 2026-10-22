@@ -49,7 +49,7 @@ public final class DomainAgentFactory implements TaskWorker {
         for(ToolBase tool:definition.tools().get()){
             if(tool.getName().startsWith("mio_"))throw new IllegalStateException("领域工具使用了保留名称");
             if(!names.add(tool.getName()))throw new IllegalStateException("领域工具名称重复");
-            var wrapped=new GuardedDomainTool(tool,execution,policy);
+            var wrapped=new GuardedDomainTool(tool,execution,policy,definition::checkAvailability);
             var existing=toolkit.getTool(tool.getName());
             if(existing==null||!ToolContract.hash(existing).equals(ToolContract.hash(wrapped))) toolkit.registerAgentTool(wrapped);
         }
@@ -71,6 +71,7 @@ public final class DomainAgentFactory implements TaskWorker {
         return Mono.using(()->{
             DomainDefinition definition=definitions.get(task.spec().capabilityId());
             if(definition==null)throw new IllegalArgumentException("领域不可用");
+            definition.checkAvailability().requireExecution();
             if(!input.first()&&states.get(null,task.childSessionId(),"agent_state",io.agentscope.core.state.AgentState.class).isEmpty())
                 throw new IllegalStateException("领域检查点缺失，不能安全恢复");
             if(definition.tools().get().isEmpty())throw new IllegalStateException("领域业务工具尚未接入");

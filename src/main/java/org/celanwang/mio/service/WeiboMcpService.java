@@ -1,5 +1,7 @@
 package org.celanwang.mio.service;
 
+import org.celanwang.mio.orchestration.CapabilityAvailability;
+
 import org.celanwang.mio.config.WeiboProperties;
 import org.celanwang.mio.model.vo.WeiboAction;
 import org.celanwang.mio.security.ToolRegistrationGuard;
@@ -29,7 +31,7 @@ public class WeiboMcpService {
     private final WeiboOAuthService oauth;
     private final Toolkit toolkit;
     private final ToolRegistrationGuard registrationGuard;
-    private McpClientWrapper client;
+    private volatile McpClientWrapper client;
     private int toolCount;
     private String error;
     private volatile java.util.List<io.agentscope.core.tool.ToolBase> businessTools = java.util.List.of();
@@ -123,6 +125,13 @@ public class WeiboMcpService {
     }
 
     public java.util.List<io.agentscope.core.tool.ToolBase> businessTools() { return businessTools; }
+    /** Does not acquire the OAuth/network lock or refresh credentials. */
+    public CapabilityAvailability availability(){
+        if(!properties.isEnabled())return CapabilityAvailability.of(CapabilityAvailability.State.UNAVAILABLE,"DISABLED","微博能力已在本机停用");
+        if(client==null||businessTools.isEmpty())return new CapabilityAvailability(
+                CapabilityAvailability.State.PREPARATION_REQUIRED,"CONNECTION_REQUIRED","需先检查授权并按需连接；尚未验证账号权限或体验额度",java.util.Set.of(WeiboConnectionTool.NAME),System.currentTimeMillis());
+        return CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"TOOLS_LOADED","微博工具已加载；授权、网络和体验额度未做在线验证");
+    }
 
     public synchronized Status status() {
         return new Status(properties.isEnabled(), oauth.isAuthorized(), client != null, toolCount, error);

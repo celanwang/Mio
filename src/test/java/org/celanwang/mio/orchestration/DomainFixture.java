@@ -26,6 +26,7 @@ final class DomainFixture {
     final AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger(),modelCalls=new AtomicInteger();
     final AtomicReference<String> toolDescription=new AtomicReference<>("contract-v1");
     final AtomicBoolean declaredReadOnly=new AtomicBoolean();
+    final AtomicReference<CapabilityAvailability> availability=new AtomicReference<>(CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"NOT_CHECKED","未在线验证"));
     final Deque<List<ContentBlock>> script=new ArrayDeque<>();
     final List<List<Msg>> inputs=new ArrayList<>();
     final Model model=mock(Model.class);
@@ -44,7 +45,7 @@ final class DomainFixture {
         @SuppressWarnings("unchecked") ObjectProvider<JevClient> jev=mock(ObjectProvider.class);
         var profiles=mock(ProfileStore.class);when(profiles.pages()).thenReturn(List.of());when(profiles.render(anyList())).thenReturn("");
         var capability=new AgentCapability("arbitrary-domain","领域测试","按目标处理任务","test-skill","1",List.of());
-        var definition=new DomainDefinition(capability,"测试领域",()->List.of(tool("query-meals",true,reads),tool("create-order",false,writes)));
+        var definition=new DomainDefinition(capability,"测试领域",()->List.of(tool("query-meals",true,reads),tool("create-order",false,writes)),availability::get);
         var factory=new DomainAgentFactory(List.of(definition),c->model,states,null,policy,mock(WeiboMcpService.class),jev,.8,
                 new TraceStore((s,e)->{}),mock(TrustStore.class),memory,mock(HabitDetector.class),profiles,new ObjectMapper());
         runtime=new TaskRuntime(store,new AgentRegistry(List.of(capability)),factory,policy,Clock.systemUTC(),16,verifiers);

@@ -73,6 +73,7 @@ public final class TaskRuntime {
                 if(!same.get().spec().equals(spec))throw new IllegalArgumentException("同一任务 key 的参数已改变，请使用新任务或先取消旧任务");
                 return Mono.just(same.get());
             }
+            registry.status(spec.capabilityId()).requireExecution();
             if(existing.size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");
             for(String dependency:spec.dependencies()){
                 var parent=require(session,dependency);
@@ -132,9 +133,14 @@ public final class TaskRuntime {
         return Mono.defer(()->{
             Object owner=new Object();if(owners.putIfAbsent(task.id(),owner)!=null)throw new IllegalStateException("任务正在执行");
             try{
-                if(!reserved)budget.task();
                 var current=store.task(task.id()).orElseThrow();
                 if(current.revision()!=task.revision()||current.status().terminal())throw new IllegalStateException("任务已改变");
+                try{registry.status(task.spec().capabilityId()).requireExecution();}
+                catch(CapabilityAvailability.Unavailable unavailable){
+                    var failed=current.next(TaskStatus.FAILED,unavailable.getMessage(),List.of(),current.effectStarted(),clock.millis());
+                    store.saveTask(current,failed,"capability_unavailable");owners.remove(task.id(),owner);return Mono.just(failed);
+                }
+                if(!reserved)budget.task();
                 var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
                 store.saveTask(current,running,"task_running");
                 var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers);
@@ -196,7 +202,7 @@ public final class TaskRuntime {
                     store.saveTask(task,rejected,"approval_rejected");return Mono.just(rejected);
                 }
                 boolean complete=updated.stream().noneMatch(a->a.decision()==null);
-                if(complete)budget.task();
+                if(complete){registry.status(task.spec().capabilityId()).requireExecution();budget.task();}
                 var saved=task.next(TaskStatus.AWAITING_APPROVAL,task.reply(),updated,false,clock.millis());store.saveTask(task,saved,"approval_recorded");
                 if(!complete)return Mono.just(saved);
                 var calls=updated.stream().map(a->new ChatRequest.Confirmation(a.callId(),a.decision())).toList();

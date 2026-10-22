@@ -48,15 +48,20 @@ public class MultiAgentConfig {
                 ()->source.getToolNames().stream().map(name->{var tool=source.getTool(name);if(!(tool instanceof ToolBase base))throw new IllegalStateException("业务工具必须保持 ToolBase 权限边界");return base;}).toList());
     }
     @Bean DomainDefinition rideDomain(TencentRideService service,@Value("${app.agent.skills-dir:./skills}")String dir){
-        return definition("tencent-ride","出行助手","腾讯即时出行的地点确认、询价、当前订单查询、经人工确认的叫车与取消。",dir,
+        var domain=definition("tencent-ride","出行助手","腾讯即时出行的地点确认、询价、当前订单查询、经人工确认的叫车与取消。",dir,
                 ()->List.of(new TencentRideTool(service),new TencentRideCreateOrderTool(service)));
+        return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
     @Bean DomainDefinition weiboDomain(WeiboMcpService service,@Value("${app.agent.skills-dir:./skills}")String dir){
-        return definition("weibo-assistant","微博助手","微博授权准备、已注册接口范围内的查询与内容处理，指定互动仍需确认。",dir,()->{
+        var domain=definition("weibo-assistant","微博助手","微博授权准备、已注册接口范围内的查询与内容处理，指定互动仍需确认。",dir,()->{
             var tools=new ArrayList<ToolBase>();tools.add(new WeiboConnectionTool(service));tools.addAll(service.businessTools());return tools;
         });
+        return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
-    @Bean AgentRegistry agentRegistry(List<DomainDefinition> definitions){return new AgentRegistry(definitions.stream().map(DomainDefinition::capability).toList());}
+    @Bean AgentRegistry agentRegistry(List<DomainDefinition> definitions){
+        var probes=new LinkedHashMap<String,java.util.function.Supplier<CapabilityAvailability>>();definitions.forEach(d->probes.put(d.capability().id(),d::checkAvailability));
+        return new AgentRegistry(definitions.stream().map(DomainDefinition::capability).toList(),probes);
+    }
     @Bean JdbcCoordinationStore coordinationStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcCoordinationStore(jdbc,source,json);}
     @Bean JdbcAgentStateStore coordinationAgentStateStore(JdbcTemplate jdbc,ObjectMapper json){return new JdbcAgentStateStore(jdbc,json);}
     @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}

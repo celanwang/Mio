@@ -39,6 +39,11 @@ class SupervisorIntegrationTest {
         assertThat(response.isMultiAgent()).isTrue();assertThat(response.getTasks()).hasSize(1);
         assertThat(response.getTasks().get(0).status()).isEqualTo(TaskStatus.COMPLETED);assertThat(fixture.reads.get()).isEqualTo(1);
         assertThat(script.catalogs.get(0).stream().map(ToolSchema::getName).toList()).contains("delegate_task").doesNotContain("query-meals","create-order");
+        var state=fixture.states.get(null,"root:supervisor","agent_state",io.agentscope.core.state.AgentState.class).orElseThrow();
+        String discovery=state.getContext().stream().flatMap(m->m.getContentBlocks(ToolResultBlock.class).stream())
+                .filter(r->"discover_agents".equals(r.getName())).flatMap(r->r.getOutput().stream()).filter(b->b instanceof TextBlock)
+                .map(b->((TextBlock)b).getText()).reduce("",String::concat);
+        assertThat(discovery).contains("capability","availability","UNKNOWN");
     }
     @Test void publicApprovalRoutesToChildThenBackToPersistedSupervisor()throws Exception{
         var fixture=new DomainFixture();var script=new Script();fixture.call("create-order",Map.of());

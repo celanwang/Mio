@@ -38,6 +38,18 @@ class MultiAgentConfigTest {
                     verifyNoInteractions(context.getBean(DataSource.class),context.getBean(WeiboMcpService.class),context.getBean(TencentRideService.class));
                 });
     }
+    @Test void discoveryUsesLocalDomainProbesWithoutOpeningConnections(){
+        new ApplicationContextRunner().withUserConfiguration(Dependencies.class,MultiAgentConfig.class).withPropertyValues("app.multi-agent.enabled=true").run(context->{
+            var ride=context.getBean(TencentRideService.class);var weibo=context.getBean(WeiboMcpService.class);
+            when(ride.availability()).thenReturn(CapabilityAvailability.of(CapabilityAvailability.State.UNAVAILABLE,"CREDENTIAL_REQUIRED","需本机配置"));
+            when(weibo.availability()).thenReturn(new CapabilityAvailability(CapabilityAvailability.State.PREPARATION_REQUIRED,"CONNECTION_REQUIRED","先准备",java.util.Set.of("prepare_weibo"),0));
+            var registry=context.getBean(AgentRegistry.class);
+            assertThat(registry.status("mcd-ordering").code()).isEqualTo("NO_TOOLS");
+            assertThat(registry.status("tencent-ride").code()).isEqualTo("CREDENTIAL_REQUIRED");
+            assertThat(registry.status("weibo-assistant").state()).isEqualTo(CapabilityAvailability.State.PREPARATION_REQUIRED);
+            verifyNoInteractions(context.getBean(DataSource.class));verify(weibo,never()).connect();
+        });
+    }
     @Configuration(proxyBeanMethods=false)
     static class Dependencies {
         @Bean @Primary Model primaryModel(){return mock(Model.class);}

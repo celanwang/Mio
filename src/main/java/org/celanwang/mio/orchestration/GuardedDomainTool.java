@@ -13,10 +13,15 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
     private final ToolBase delegate;
     private final TaskExecution execution;
     private final PolicyEngine policy;
+    private final java.util.function.Supplier<CapabilityAvailability> availability;
     GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy){
+        this(delegate,execution,policy,()->CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"NOT_CHECKED","未检查"));
+    }
+    GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy,java.util.function.Supplier<CapabilityAvailability> availability){
         super(ToolBase.builder().name(delegate.getName()).description(delegate.getDescription())
                 .inputSchema(delegate.getParameters()).readOnly(false).concurrencySafe(false));
         this.delegate=delegate;this.execution=execution;this.policy=policy;
+        this.availability=availability;
     }
     @Override public AgentTool contractSource(){return delegate;}
     static boolean readOnly(ToolBase tool,Map<String,Object> input){
@@ -28,6 +33,7 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
     }
     @Override public Mono<PermissionDecision> checkPermissions(Map<String,Object> input,PermissionContextState context){
         var task=execution.businessActive();boolean read=readOnly(delegate,input);
+        availability.get().requireTool(getName());
         if(!read&&task.spec().scope()==TaskScope.PREPARE)return Mono.just(PermissionDecision.deny("当前任务只允许查询与准备"));
         if(!read&&(policy.isCircuitOpen()||!ToolPolicies.isJevReviewable(getName(),input)))return Mono.just(PermissionDecision.ask("本次操作必须人工确认"));
         if(read)return Mono.just(PermissionDecision.allow("任务范围内的查询或当前草稿编辑"));
@@ -35,7 +41,9 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
     }
     @Override public Mono<ToolResultBlock> callAsync(ToolCallParam call){
         return Mono.defer(()->{
-            execution.businessActive();execution.budget().tool();
+            execution.businessActive();
+            availability.get().requireTool(getName());
+            execution.budget().tool();
             execution.validateApproval(call.getToolUseBlock(),ToolContract.hash(this));
             boolean read=readOnly(delegate,call.getInput());
             String operation=read?null:execution.beforeEffect(call.getToolUseBlock(),ToolContract.hash(this));

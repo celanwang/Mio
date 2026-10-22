@@ -1,5 +1,7 @@
 package org.celanwang.mio.service;
 
+import org.celanwang.mio.orchestration.CapabilityAvailability;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.celanwang.mio.config.TencentRideProperties;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,6 +33,21 @@ public class TencentRideService {
         this.json = json;
         this.skillsDir = Path.of(skillsDir);
     }
+    /** Local configuration observation only: no process, provider request or credential disclosure. */
+    public CapabilityAvailability availability(){
+        var state=CapabilityAvailability.State.UNAVAILABLE;
+        if(!properties.isEnabled())return CapabilityAvailability.of(state,"DISABLED","出行能力已在本机停用");
+        if(properties.getToken()==null||properties.getToken().isBlank())return CapabilityAvailability.of(state,"CREDENTIAL_REQUIRED","需要在本机配置出行凭据；不要在对话中发送凭据");
+        String python=properties.getPython();
+        boolean executable=python!=null&&!python.isBlank()&&(python.contains("/")?isExecutableFile(Path.of(python)):
+                java.util.Arrays.stream(System.getenv().getOrDefault("PATH","").split(java.io.File.pathSeparator)).filter(p->!p.isBlank()).anyMatch(p->isExecutableFile(Path.of(p,python))));
+        if(!executable)return CapabilityAvailability.of(state,"PYTHON_UNAVAILABLE","本机未找到配置的可执行程序，请检查 Python 配置");
+        for(String name:new String[]{"tms_takecar.py","tms_takecar_api.py","personal_agent_bridge.py"})
+            if(!Files.isRegularFile(skillsDir.resolve("tencent-ride/scripts").resolve(name))&&!new ClassPathResource("skills/tencent-ride/scripts/"+name,TencentRideService.class.getClassLoader()).exists())
+                return CapabilityAvailability.of(state,"SCRIPT_UNAVAILABLE","出行桥接脚本缺失，请检查技能安装");
+        return CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"LOCAL_CONFIGURED","本地配置已具备；Python 版本、凭据有效性和业务权限尚未验证，实际使用仍需 preflight");
+    }
+    private static boolean isExecutableFile(Path path){return Files.isRegularFile(path)&&Files.isExecutable(path);}
 
     // 同一账号串行执行；会话各自保存起终点和报价，不能覆盖另一会话的已确认行程。
     public synchronized String execute(String sessionId, Map<String, Object> input) throws IOException {
