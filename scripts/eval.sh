@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-./scripts/mvn.sh -B verify
-python3 -m unittest discover -s eval/tests -v
+mio_eval_run_id=$(python3 -m eval.acceptance begin)
+./scripts/mvn.sh -B -Dmio.eval.run-id="$mio_eval_run_id" verify
+python3 -m eval.acceptance python
 python3 -m eval.runner report --runs target/evaluation/fixture-runs.jsonl --output target/evaluation/report.json
 python3 -m eval.runner injections --runs target/evaluation/injection-fixtures.jsonl --output target/evaluation/injection-report.json
 python3 -m eval.runner coverage --output target/evaluation/coverage.json
@@ -17,3 +18,10 @@ else
 fi
 python3 -c 'from eval.summary import write_summary; write_summary("target/evaluation")'
 printf '%s\n' 'Offline fixture report: target/evaluation/summary.md (not model qualification evidence)'
+
+if [[ -n "${MIO_TEST_PG_URL:-}" ]]; then
+  python3 -m eval.acceptance report --require-postgres
+else
+  python3 -m eval.acceptance report
+fi
+printf '%s\n' 'Multi-Agent acceptance: target/evaluation/acceptance.md (controlled preview only)'
