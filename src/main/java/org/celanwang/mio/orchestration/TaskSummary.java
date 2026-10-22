@@ -10,6 +10,6 @@ public record TaskSummary(String id,String key,String agent,String objective,Tas
                 ?"执行已中断，业务结果已通过回执核实；请查看操作记录，不重跑本任务。":task.reply();
         return new TaskSummary(task.id(),task.spec().key(),name,task.spec().objective(),
                 task.status(),reply,task.goalRevision(),task.unresolvedEffects(),
-                (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations(),TaskFacts.of(task),task.questionId());
+                (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations(),TaskFacts.validAt(task,System.currentTimeMillis()),task.questionId());
     }
 }

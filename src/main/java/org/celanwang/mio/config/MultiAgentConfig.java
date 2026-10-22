@@ -40,7 +40,7 @@ public class MultiAgentConfig {
                 }
             }
             return new DomainDefinition(new AgentCapability(id,name,description,id,HexFormat.of().formatHex(digest.digest()),
-                    List.of("查询与准备可自主进行","写操作受任务范围和权限链约束","业务结果需实际回执核查")),prompt,tools);
+                    List.of("查询与准备可自主进行","写操作受任务范围和权限链约束","业务结果需实际回执核查"),CapabilityInputContract.contextual()),prompt,tools);
         }catch(Exception e){throw new IllegalStateException("无法读取领域技能："+id,e);}
     }
     @Bean DomainDefinition mcdDomain(@Qualifier("toolkit")Toolkit source,@Value("${app.agent.skills-dir:./skills}")String dir){
@@ -73,11 +73,12 @@ public class MultiAgentConfig {
             HabitDetector habits,ProfileStore profiles,ObjectMapper json){
         return new DomainAgentFactory(definitions,c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json);
     }
+    @Bean FactExtractor tencentQuoteFactExtractor(){return new TencentQuoteFactExtractor();}
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}
     @Bean OperationReconciler tencentOperationReconciler(TencentRideService service){return new TencentOperationReconciler(service);}
     @Bean TaskRuntime taskRuntime(JdbcCoordinationStore store,AgentRegistry registry,DomainAgentFactory factory,PolicyEngine policy,List<OperationVerifier> verifiers,
-                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers){
-        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers);
+                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors){
+        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers,factExtractors);
     }
     @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json){
         return new SupervisorFactory(model,states,registry,runtime,json);

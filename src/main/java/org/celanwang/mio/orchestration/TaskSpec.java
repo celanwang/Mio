@@ -3,7 +3,10 @@ package org.celanwang.mio.orchestration;
 import java.util.List;
 
 public record TaskSpec(String key, String capabilityId, String objective, List<String> constraints,
-                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs) {
+                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs,String inputContract) {
+    public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope,List<InputBinding> inputs){
+        this(key,capabilityId,objective,constraints,dependencies,scope,inputs,"default");
+    }
     public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope){
         this(key,capabilityId,objective,constraints,dependencies,scope,List.of());
     }
@@ -17,6 +20,8 @@ public record TaskSpec(String key, String capabilityId, String objective, List<S
         if (dependencies.size() > 8 || dependencies.stream().anyMatch(key::equals)
                 || dependencies.stream().distinct().count() != dependencies.size()) throw new IllegalArgumentException("任务依赖无效");
         scope = scope == null ? TaskScope.PREPARE : scope;
+        inputContract=inputContract==null?"default":inputContract;
+        if(!inputContract.matches("[a-z][a-z0-9-]{0,63}"))throw new IllegalArgumentException("输入契约编号无效");
         inputs=inputs==null?List.of():List.copyOf(inputs);
         if(inputs.size()>8||inputs.stream().map(InputBinding::alias).distinct().count()!=inputs.size())throw new IllegalArgumentException("事实输入过多或别名重复");
         for(var binding:inputs)if(!dependencies.contains(binding.taskId()))throw new IllegalArgumentException("事实输入必须引用已声明的依赖任务");

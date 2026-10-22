@@ -99,6 +99,15 @@ public final class JdbcCoordinationStore implements CoordinationStore {
             }
         });
     }
+    @Override public void recordObservation(String taskId,FactObservation observation,boolean starting,long now){
+        transaction.executeWithoutResult(tx->{
+            var original=task(taskId).orElseThrow();
+            Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id=? FOR UPDATE",Long.class,original.sessionId());
+            var current=jdbc.queryForObject("SELECT content FROM tasks WHERE id=? FOR UPDATE",(rs,n)->decode(rs.getString(1),TaskRecord.class),taskId);
+            if(version==null||version!=current.goalRevision())throw new IllegalStateException("目标已改变，事实观测失效");
+            saveTask(current,current.withObservation(observation,starting,now),starting?"fact_observation_started":"fact_observation_returned");
+        });
+    }
     private void lockScope(String scope){
         if(scope.isEmpty())return;
         jdbc.update("INSERT INTO operation_scopes(id) VALUES (?) ON CONFLICT DO NOTHING",scope);

@@ -18,6 +18,7 @@ public final class TaskRuntime {
     private final int maxTasks;
     private final List<OperationVerifier> verifiers;
     private final List<OperationReconciler> reconcilers;
+    private final List<FactExtractor> factExtractors;
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
         this(store,registry,worker,policy,clock,maxTasks,List.of());
@@ -26,6 +27,10 @@ public final class TaskRuntime {
         this(store,registry,worker,policy,clock,maxTasks,verifiers,List.of());
     }
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers){
+        this(store,registry,worker,policy,clock,maxTasks,verifiers,reconcilers,List.of());
+    }
+    public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors){
+        this.factExtractors=List.copyOf(factExtractors);
         this.store=store;this.registry=registry;this.worker=worker;this.policy=policy;this.clock=clock;this.maxTasks=maxTasks;
         this.verifiers=List.copyOf(verifiers);
         this.reconcilers=List.copyOf(reconcilers);
@@ -57,7 +62,7 @@ public final class TaskRuntime {
     private TaskRecord refreshValidity(TaskRecord task){
         if(task.status().terminal()||task.status()==TaskStatus.RUNNING)return task;
         boolean changed;
-        try{changed=!registry.require(task.spec().capabilityId()).version().equals(task.capabilityVersion());}
+        try{changed=!registry.require(task.spec().capabilityId()).executionVersion().equals(task.capabilityVersion());}
         catch(IllegalArgumentException unavailable){changed=true;}
         boolean expired=task.status()==TaskStatus.AWAITING_APPROVAL&&task.approvals().stream().anyMatch(a->a.expiresAt()<=clock.millis());
         boolean goalChanged=(task.status()==TaskStatus.AWAITING_APPROVAL||task.status()==TaskStatus.WAITING_DEPENDENCY||task.status()==TaskStatus.INPUT_READY)
@@ -72,7 +77,7 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> submit(String session,TaskSpec spec,RunBudget budget){
         return Mono.defer(()->{
-            var capability=registry.require(spec.capabilityId());var goal=goal(session);var existing=list(session);
+            var capability=registry.require(spec.capabilityId());capability.validateSpec(spec);var goal=goal(session);var existing=list(session);
             var same=existing.stream().filter(t->t.goalRevision()==goal.revision()&&t.spec().key().equals(spec.key())).findFirst();
             if(same.isPresent()){
                 if(!same.get().spec().equals(spec))throw new IllegalArgumentException("同一任务 key 的参数已改变，请使用新任务或先取消旧任务");
@@ -87,7 +92,7 @@ public final class TaskRuntime {
             if(spec.scope()==TaskScope.REQUEST_APPROVAL&&existing.stream().anyMatch(t->t.spec().capabilityId().equals(spec.capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域存在结果不明的提交，请先核查，不创建新的写任务");
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
-                    capability.version(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());store.createTask(task);
+                    capability.executionVersion(),TaskStatus.WAITING_DEPENDENCY,"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());store.createTask(task);
             return runWhenReady(task,goal,budget);
         });
     }
@@ -148,9 +153,10 @@ public final class TaskRuntime {
                 if(!reserved)budget.task();
                 var running=current.next(TaskStatus.RUNNING,"",List.of(),current.effectStarted(),null,clock.millis());
                 store.saveTask(current,running,"task_running");
-                var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers);
+                var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers,factExtractors,registry.require(task.spec().capabilityId()));
                 return Mono.defer(()->{
                     var bound=new TaskWorker.Input(input.first(),input.userText(),input.decisions(),TaskFacts.bind(store,running,clock.millis()));
+                    registry.require(running.spec().capabilityId()).validateInputs(running.spec(),bound.bindings());
                     return worker.run(running,goal,bound,execution);
                 }).map(result->finish(running.id(),result))
                         .onErrorResume(error->{
@@ -207,7 +213,11 @@ public final class TaskRuntime {
                     store.saveTask(task,rejected,"approval_rejected");return Mono.just(rejected);
                 }
                 boolean complete=updated.stream().noneMatch(a->a.decision()==null);
-                if(complete){registry.status(task.spec().capabilityId()).requireExecution();budget.task();}
+                if(complete){
+                    registry.status(task.spec().capabilityId()).requireExecution();
+                    registry.require(task.spec().capabilityId()).validateInputs(task.spec(),TaskFacts.bind(store,task,clock.millis()));
+                    budget.task();
+                }
                 var saved=task.next(TaskStatus.AWAITING_APPROVAL,task.reply(),updated,false,clock.millis());store.saveTask(task,saved,"approval_recorded");
                 if(!complete)return Mono.just(saved);
                 var calls=updated.stream().map(a->new ChatRequest.Confirmation(a.callId(),a.decision())).toList();

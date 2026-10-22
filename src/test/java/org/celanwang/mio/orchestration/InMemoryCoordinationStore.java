@@ -23,6 +23,11 @@ final class InMemoryCoordinationStore implements CoordinationStore {
             throw new IllegalStateException("unverified domain effect");
         saveTask(expected,expected.withOperation(operation,now),"operation_started");
     }
+    @Override public synchronized void recordObservation(String taskId,FactObservation observation,boolean starting,long now){
+        var current=records.get(taskId);
+        if(goals.get(current.sessionId()).revision()!=current.goalRevision())throw new IllegalStateException("stale goal");
+        saveTask(current,current.withObservation(observation,starting,now),starting?"fact_observation_started":"fact_observation_returned");
+    }
     @Override public synchronized void recordReceipt(String taskId,String operationId,OperationReceipt receipt,long now){
         var old=records.get(taskId);var next=old.withReceipt(operationId,receipt,now);
         if(next!=old)saveTask(old,next,"operation_receipt");

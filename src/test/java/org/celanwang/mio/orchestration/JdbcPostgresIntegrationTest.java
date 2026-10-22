@@ -91,6 +91,41 @@ class JdbcPostgresIntegrationTest {
         assertThat(store.task("a").orElseThrow().revision()).isEqualTo(revision);
         store.startOperation(createSecond(),new OperationRecord("other","other","write","h",5,"SUBMITTING",""),5);
     }
+    @Test void observationEvidenceSurvivesReloadAndAuditFailureRollsBackInvalidation(){
+        var original=task("observation");store.createTask(original);
+        var pending=new FactObservation("obs","ride.quote","test-adapter","query","hash",10,"","",null);
+        store.recordObservation(original.id(),pending,true,10);
+        var current=store.task(original.id()).orElseThrow();
+        var returned=pending.returned(current,"raw evidence",new FactExtractor.Value("ride_quote",Map.of("durationSeconds","60"),1000),11);
+        store.recordObservation(original.id(),returned,false,11);
+        var restored=new JdbcCoordinationStore(jdbc,jdbc.getDataSource(),new ObjectMapper()).task(original.id()).orElseThrow();
+        assertThat(TaskFacts.validAt(restored,12)).hasSize(1);assertThat(restored.observations().get(0).output()).isEqualTo("raw evidence");
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_observation CHECK(type <> 'fact_observation_started') NOT VALID");
+        var refresh=new FactObservation("refresh","ride.quote","test-adapter","query","hash",12,"","",null);
+        assertThatThrownBy(()->store.recordObservation(original.id(),refresh,true,12)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(store.task(original.id()).orElseThrow()).isEqualTo(restored);
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_observation");
+        store.recordObservation(original.id(),refresh,true,12);
+        assertThat(TaskFacts.of(store.task(original.id()).orElseThrow())).isEmpty();
+    }
+    @Test void concurrentObservationCompletionsPreserveBothEvidenceAndStartOrder()throws Exception{
+        var original=task("observation");store.createTask(original);
+        var first=new FactObservation("first","ride.quote","test","query","hash",10,"","",null);
+        var second=new FactObservation("second","ride.quote","test","query","hash",11,"","",null);
+        store.recordObservation(original.id(),first,true,10);store.recordObservation(original.id(),second,true,11);
+        var current=store.task(original.id()).orElseThrow();
+        var a=first.returned(current,"earlier quote",new FactExtractor.Value("ride_quote",Map.of("durationSeconds","60"),1000),12);
+        var b=second.returned(current,"refresh failed",null,12);
+        var barrier=new CyclicBarrier(2);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var jobs=List.of(a,b).stream().map(observation->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);store.recordObservation(original.id(),observation,false,12);return true;})).toList();
+            for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        var restored=store.task(original.id()).orElseThrow();
+        assertThat(restored.observations()).containsExactly(a,b);assertThat(TaskFacts.of(restored)).isEmpty();
+        store.saveTask(restored,restored.next(TaskStatus.CANCELLED,"cancelled",List.of(),false,13),"cancelled");
+        assertThatThrownBy(()->store.recordObservation(original.id(),new FactObservation("late","ride.quote","test","query","hash",14,"","",null),true,14)).isInstanceOf(IllegalStateException.class);
+    }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
     @Test void unresolvedCredentialScopeBlocksOtherSessionsAndReleasesOnlyWithEvidence(){
         String scope="b".repeat(64);var a=task("a");store.createTask(a);

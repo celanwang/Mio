@@ -33,6 +33,7 @@ final class OrchestrationTool extends ToolBase {
                 "inputs",Map.of("type","array","maxItems",8,"items",Map.of("type","object","properties",Map.of(
                         "taskId",Map.of("type","string"),"factId",Map.of("type","string"),"version",Map.of("type","string"),"alias",Map.of("type","string")),
                         "required",List.of("taskId","factId","version","alias"),"additionalProperties",false)),
+                "inputContract",Map.of("type","string","description","选择 capability.inputContracts 中的契约编号；按 requiredFacts 的别名和类型完整绑定 inputs。"),
                 "scope",Map.of("type","string","enum",List.of("PREPARE","REQUEST_APPROVAL"))),
                 "required",List.of("key","capabilityId","objective"),"additionalProperties",false);
         if(name.equals("continue_task")||name.equals("cancel_task"))return Map.of("type","object","properties",Map.of("taskId",Map.of("type","string")),"required",List.of("taskId"),"additionalProperties",false);

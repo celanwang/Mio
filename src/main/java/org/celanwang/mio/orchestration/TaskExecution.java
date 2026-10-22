@@ -16,6 +16,8 @@ public final class TaskExecution {
     public record ApprovalGrant(String fingerprint,long expiresAt) {}
     private final Map<String,ApprovalGrant> approved;
     private final List<OperationVerifier> verifiers;
+    private final List<FactExtractor> factExtractors;
+    private final AgentCapability capability;
     private volatile String question, finalAnswer;
     public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
                          Clock clock,Map<String,ApprovalGrant> approved){
@@ -23,6 +25,11 @@ public final class TaskExecution {
     }
     public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
                          Clock clock,Map<String,ApprovalGrant> approved,List<OperationVerifier> verifiers){
+        this(store,task,goal,budget,policy,clock,approved,verifiers,List.of(),null);
+    }
+    public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
+                         Clock clock,Map<String,ApprovalGrant> approved,List<OperationVerifier> verifiers,List<FactExtractor> factExtractors,AgentCapability capability){
+        this.factExtractors=List.copyOf(factExtractors);this.capability=capability;
         this.store=store;taskId=task.id();this.goal=goal;this.budget=budget;this.policy=policy;this.clock=clock;this.approved=Map.copyOf(approved);
         this.verifiers=List.copyOf(verifiers);
     }
@@ -40,7 +47,11 @@ public final class TaskExecution {
         budget.active();var task=store.task(taskId).orElseThrow();
         if(task.status()!=TaskStatus.RUNNING || task.goalRevision()!=goal.revision()
                 || store.goal(task.sessionId()).orElseThrow().revision()!=goal.revision())throw new IllegalStateException("任务已失效或取消");
-        TaskFacts.bind(store,task,clock.millis());
+        var inputs=TaskFacts.bind(store,task,clock.millis());
+        if(capability!=null){
+            if(!capability.executionVersion().equals(task.capabilityVersion()))throw new IllegalStateException("能力契约已改变");
+            capability.validateInputs(task.spec(),inputs);
+        }
         return task;
     }
     public boolean humanApproved(ToolUseBlock call,String contractHash){
@@ -64,6 +75,26 @@ public final class TaskExecution {
         String id=task.id()+":"+call.getId();
         var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scopeKey);
         store.startOperation(task,operation,clock.millis());return id;
+    }
+    public record ObservationCall(FactObservation observation,FactExtractor extractor) {}
+    public synchronized Optional<ObservationCall> observationStarting(ToolUseBlock call){
+        businessActive();
+        var matches=factExtractors.stream().filter(f->f.invalidatedKey(call.getName(),call.getInput()).isPresent()).toList();
+        if(matches.size()>1)throw new IllegalStateException("事实提取器匹配冲突");
+        if(matches.isEmpty())return Optional.empty();
+        var extractor=matches.get(0);
+        var observation=new FactObservation(UUID.randomUUID().toString(),extractor.invalidatedKey(call.getName(),call.getInput()).orElseThrow(),
+                extractor.source(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"","",null);
+        store.recordObservation(taskId,observation,true,clock.millis());
+        return Optional.of(new ObservationCall(observation,extractor));
+    }
+    public synchronized void observationReturned(ObservationCall call,ToolUseBlock tool,String raw,String frameworkState){
+        var task=businessActive();FactExtractor.Value value=null;
+        if(("SUCCESS".equals(frameworkState)||"RUNNING".equals(frameworkState))&&raw.length()<=128000){
+            try{value=call.extractor().extract(tool.getName(),tool.getInput(),raw,clock.millis()).orElse(null);}
+            catch(RuntimeException invalid){/* The durable invalidation marker remains authoritative. */}
+        }
+        store.recordObservation(taskId,call.observation().returned(task,raw,value,clock.millis()),false,clock.millis());
     }
     public OperationRecord operation(String id){return store.task(taskId).orElseThrow().operations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow();}
     public synchronized void effectReturned(String id,String output){effectReturned(id,output,"SUCCESS");}
