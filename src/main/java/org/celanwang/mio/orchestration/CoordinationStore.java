@@ -14,6 +14,8 @@ public interface CoordinationStore {
     /** Fence competing submissions and persist the operation before contacting a provider. */
     void startOperation(TaskRecord expected, OperationRecord operation, long now);
     /** Persist invalidation before querying and evidence after return, under the current goal/task fence. */
+    /** Re-evaluate the dependency graph while fencing task changes; do not trust a caller-authored cause. */
+    TaskRecord invalidateDependencies(String taskId,long now);
     void recordObservation(String taskId,FactObservation observation,boolean starting,long now);
     void recordReceipt(String taskId,String operationId,OperationReceipt receipt,long now);
 }

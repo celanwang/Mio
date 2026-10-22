@@ -48,6 +48,9 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
             boolean read=readOnly(delegate,call.getInput());
             var observation=execution.observationStarting(call.getToolUseBlock());
             String operation=read?null:execution.beforeEffect(call.getToolUseBlock(),ToolContract.hash(this),delegate instanceof OperationBoundTool bound?bound.operationScope():"");
+            // Persisting the operation can wait on database locks; recheck the lease and grant afterward.
+            execution.businessActive();
+            execution.validateApproval(call.getToolUseBlock(),ToolContract.hash(this));
             Mono<ToolResultBlock> invocation;
             if(operation!=null&&delegate instanceof OperationBoundTool bound){var op=execution.operation(operation);invocation=bound.callWithOperation(call,op.logicalId(),op.scopeKey());}
             else invocation=delegate.callAsync(call);

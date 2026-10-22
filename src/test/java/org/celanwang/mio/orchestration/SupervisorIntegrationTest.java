@@ -45,6 +45,39 @@ class SupervisorIntegrationTest {
                 .map(b->((TextBlock)b).getText()).reduce("",String::concat);
         assertThat(discovery).contains("capability","availability","UNKNOWN");
     }
+    @Test void supervisorReviewsAndRebuildsOnlyAnAffectedPreparationWithinTheExistingTurn()throws Exception{
+        var f=new DomainFixture();f.call("create-order",Map.of());
+        var unrelated=f.runtime.submit("root",f.spec("unrelated",TaskScope.REQUEST_APPROVAL),f.budget).block();
+        long now=System.currentTimeMillis();var goal=f.runtime.goal("root");
+        var old=quoteSource(f,"old-quote",goal,now-10000,now-5000);var oldFact=TaskFacts.of(old).get(0);
+        var analysis=new TaskRecord("old-analysis","root",goal.id(),goal.revision(),new TaskSpec("old-analysis","arbitrary-domain","分析行程预算",null,List.of(old.id()),TaskScope.PREPARE,
+                List.of(new InputBinding(old.id(),oldFact.id(),oldFact.version(),"quote"))),"old-analysis-child","1",TaskStatus.COMPLETED,"historical",null,List.of(),false,List.of(),0,now,now);f.store.createTask(analysis);
+        var fresh=quoteSource(f,"fresh-quote",goal,now,now+60000);var fact=TaskFacts.of(fresh).get(0);
+        var script=new Script();script.tool("review_plan",Map.of());
+        script.tool("delegate_task",Map.of("key","replanned-analysis","capabilityId","arbitrary-domain","objective",analysis.spec().objective(),"scope","PREPARE",
+                "dependencies",List.of(fresh.id()),"inputs",List.of(Map.of("taskId",fresh.id(),"factId",fact.id(),"version",fact.version(),"alias","quote"))));
+        script.say("已用有效事实更新受影响的分析");f.call("mio_finish_task",Map.of("text","参考新快照完成分析"));
+        var registry=new AgentRegistry(List.of(new AgentCapability("arbitrary-domain","领域助手","desc","s","1",List.of())));
+        try(var root=new SupervisorFactory(script.model,f.states,registry,f.runtime,new ObjectMapper()).create("root",f.budget)){
+            root.call(List.of(new UserMessage("继续处理当前目标中的分析")),io.agentscope.core.agent.RuntimeContext.builder().sessionId("root:supervisor").build()).block(Duration.ofSeconds(10));
+        }
+        assertThat(f.runtime.goal("root")).isEqualTo(goal);assertThat(f.store.task(unrelated.id()).orElseThrow()).isEqualTo(unrelated);
+        assertThat(f.store.task(analysis.id()).orElseThrow().status()).isEqualTo(TaskStatus.COMPLETED);assertThat(f.store.task(analysis.id()).orElseThrow().invalidation()).isNotNull();
+        var rebuilt=f.store.tasks("root").stream().filter(t->t.spec().key().equals("replanned-analysis")).findFirst().orElseThrow();
+        assertThat(rebuilt.status()).isEqualTo(TaskStatus.COMPLETED);assertThat(rebuilt.spec().inputs().get(0).version()).isEqualTo(fact.version());
+        assertThat(f.writes.get()).isZero();assertThat(f.reads.get()).isZero();assertThat(f.modelCalls.get()).isEqualTo(2);
+        var checkpoint=f.states.get(null,"root:supervisor","agent_state",io.agentscope.core.state.AgentState.class).orElseThrow();
+        var review=checkpoint.getContext().stream().flatMap(m->m.getContentBlocks(ToolResultBlock.class).stream()).filter(r->"review_plan".equals(r.getName()))
+                .flatMap(r->r.getOutput().stream()).filter(b->b instanceof TextBlock).map(b->((TextBlock)b).getText()).reduce("",String::concat);
+        assertThat(review).contains("sourceRepairs","FACT_EXPIRED","unaffectedTaskIds",unrelated.id(),analysis.id());
+    }
+    private TaskRecord quoteSource(DomainFixture f,String id,GoalRecord goal,long observed,long expires){
+        var source=new TaskRecord(id,"root",goal.id(),goal.revision(),new TaskSpec(id,"arbitrary-domain","prepare quote",null,null,TaskScope.PREPARE),id+"-child","1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,observed,observed);
+        var observation=new FactObservation(id+"-fact","ride.quote","fixture","query","hash",observed,"","",null);
+        source=source.withObservation(observation,true,observed);
+        source=source.withObservation(observation.returned(source,"synthetic receipt",new FactExtractor.Value("ride_quote",Map.of("durationSeconds","60"),expires),observed),false,observed);
+        source=source.next(TaskStatus.COMPLETED,"quote",List.of(),false,observed);f.store.createTask(source);return source;
+    }
     @Test void publicApprovalRoutesToChildThenBackToPersistedSupervisor()throws Exception{
         var fixture=new DomainFixture();var script=new Script();fixture.call("create-order",Map.of());
         script.tool("delegate_task",Map.of("key","order","capabilityId","arbitrary-domain","objective","按用户要求下单","scope","REQUEST_APPROVAL"));script.say("请确认这项操作");

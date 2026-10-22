@@ -36,9 +36,10 @@ class TaskFactBindingTest {
         var parent=source("parent","root");var fact=TaskFacts.of(parent).get(0);var starts=new AtomicInteger();
         var runtime=runtime((t,g,i,e)->{starts.incrementAndGet();return Mono.error(new AssertionError("must not run"));});
         var result=runtime.submit("root",spec(parent,fact,"invented-version"),budget).block();
-        assertThat(result.status()).isEqualTo(TaskStatus.FAILED);assertThat(result.reply()).contains("事实");assertThat(starts.get()).isZero();
+        assertThat(result.status()).isEqualTo(TaskStatus.STALE);
+        assertThat(result.invalidation().code()).isEqualTo(TaskInvalidation.Code.FACT_CHANGED);assertThat(result.reply()).contains("事实");assertThat(starts.get()).isZero();
         var fake=new InputBinding(parent.id(),"invented-fact",fact.version(),"order");
-        assertThat(runtime.submit("root",new TaskSpec("fake","domain","consume",null,List.of(parent.id()),null,List.of(fake)),budget).block().status()).isEqualTo(TaskStatus.FAILED);
+        assertThat(runtime.submit("root",new TaskSpec("fake","domain","consume",null,List.of(parent.id()),null,List.of(fake)),budget).block().status()).isEqualTo(TaskStatus.STALE);
     }
     @Test void ordinaryProseAndUnconfirmedReceiptsAreNeverProjectedAsFacts(){
         var parent=source("parent","root");

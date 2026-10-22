@@ -76,7 +76,8 @@ class RuntimeLifecycleTest {
         var starts=new AtomicInteger();var r=runtime((t,g,i,e)->{starts.incrementAndGet();return Mono.error(new IllegalStateException("failed"));});
         var parent=r.submit("root",spec("parent"),budget).block();
         var child=r.submit("root",new TaskSpec("child","domain","后续",null,List.of(parent.id()),TaskScope.PREPARE),budget).block();
-        assertThat(child.status()).isEqualTo(TaskStatus.FAILED);assertThat(starts.get()).isEqualTo(1);
+        assertThat(child.status()).isEqualTo(TaskStatus.STALE);assertThat(starts.get()).isEqualTo(1);
+        assertThat(child.invalidation().code()).isEqualTo(TaskInvalidation.Code.DEPENDENCY_FAILED);
     }
     @Test void finishOrQuestionClosesTheLeaseForAllLaterBusinessTools(){
         var r=runtime((t,g,i,e)->{

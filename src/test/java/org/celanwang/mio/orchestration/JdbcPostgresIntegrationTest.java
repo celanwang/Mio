@@ -126,6 +126,77 @@ class JdbcPostgresIntegrationTest {
         store.saveTask(restored,restored.next(TaskStatus.CANCELLED,"cancelled",List.of(),false,13),"cancelled");
         assertThatThrownBy(()->store.recordObservation(original.id(),new FactObservation("late","ride.quote","test","query","hash",14,"","",null),true,14)).isInstanceOf(IllegalStateException.class);
     }
+    @Test void dependencyInvalidationIsAtomicAuditedAndPreservesCompletedHistoryUnderConcurrency()throws Exception{
+        var source=task("source");store.createTask(source);
+        var pending=new FactObservation("quote","ride.quote","test","query","hash",10,"","",null);
+        store.recordObservation(source.id(),pending,true,10);
+        var current=store.task(source.id()).orElseThrow();
+        store.recordObservation(source.id(),pending.returned(current,"quote evidence",new FactExtractor.Value("ride_quote",Map.of("durationSeconds","60"),20),11),false,11);
+        current=store.task(source.id()).orElseThrow();var completed=current.next(TaskStatus.COMPLETED,"quoted",List.of(),false,12);store.saveTask(current,completed,"completed");
+        var fact=TaskFacts.of(completed).get(0);
+        var consumer=new TaskRecord("consumer","root","g",1,new TaskSpec("consumer","domain","analyze",null,List.of(source.id()),TaskScope.PREPARE,
+                List.of(new InputBinding(source.id(),fact.id(),fact.version(),"quote"))),"consumer-child","v1",TaskStatus.COMPLETED,"historical result",null,List.of(),false,List.of(),0,10,10);
+        store.createTask(consumer);
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_invalidation CHECK(type <> 'task_dependency_invalidated')");
+        assertThatThrownBy(()->store.invalidateDependencies(consumer.id(),20)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(store.task(consumer.id()).orElseThrow()).isEqualTo(consumer);jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_invalidation");
+        var barrier=new CyclicBarrier(2);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var jobs=java.util.stream.IntStream.range(0,2).mapToObj(i->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return store.invalidateDependencies(consumer.id(),20);})).toList();
+            for(var job:jobs)assertThat(job.get(10,TimeUnit.SECONDS).invalidation().code()).isEqualTo(TaskInvalidation.Code.FACT_EXPIRED);
+        }finally{pool.shutdownNow();}
+        var restored=new JdbcCoordinationStore(jdbc,jdbc.getDataSource(),new ObjectMapper()).task(consumer.id()).orElseThrow();
+        assertThat(restored.status()).isEqualTo(TaskStatus.COMPLETED);assertThat(restored.reply()).isEqualTo("historical result");
+        assertThat(restored.revision()).isEqualTo(1);assertThat(restored.invalidation().rootTaskId()).isEqualTo(source.id());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='task_dependency_invalidated'",Integer.class)).isEqualTo(1);
+    }
+    @Test void submissionValidatesTransitiveAncestorsEvenWithoutDirectFactBindings(){
+        var source=task("source");store.createTask(source);
+        var op=new OperationRecord("source-op","source-call","write","hash",1,"SUBMITTING","");store.startOperation(source,op,1);
+        store.recordReceipt(source.id(),op.id(),new OperationReceipt("receipt","test","SUCCESS","proof",OperationOutcome.CONFIRMED_APPLIED,"business",2),2);
+        source=store.task(source.id()).orElseThrow();var completed=source.next(TaskStatus.COMPLETED,"done",List.of(),true,3);store.saveTask(source,completed,"completed");
+        var fact=TaskFacts.of(completed).get(0);
+        var middle=new TaskRecord("middle","root","g",1,new TaskSpec("middle","domain","analysis",null,List.of(source.id()),TaskScope.PREPARE,
+                List.of(new InputBinding(source.id(),fact.id(),fact.version(),"resource"))),"middle-child","v1",TaskStatus.COMPLETED,"done",null,List.of(),false,List.of(),0,0,0);store.createTask(middle);
+        var leaf=new TaskRecord("leaf","root","g",1,new TaskSpec("leaf","domain","followup",null,List.of(middle.id()),TaskScope.REQUEST_APPROVAL),"leaf-child","v1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,0,0);store.createTask(leaf);
+        assertThat(TaskDependencies.ancestors(store,leaf)).containsExactly("middle","source");
+        store.recordReceipt(source.id(),op.id(),new OperationReceipt("conflict","test","SUCCESS","conflict",OperationOutcome.CONFIRMED_APPLIED,"different",4),4);
+        assertThatThrownBy(()->store.startOperation(leaf,new OperationRecord("leaf-op","c","write","hash",5,"SUBMITTING",""),5)).isInstanceOf(TaskFacts.InputUnavailable.class);
+        assertThat(store.task(leaf.id()).orElseThrow().operations()).isEmpty();
+        var invalid=store.invalidateDependencies(leaf.id(),5);assertThat(invalid.invalidation().rootTaskId()).isEqualTo(source.id());
+        assertThat(invalid.invalidation().sourceTaskId()).isEqualTo(middle.id());
+    }
+    @Test void ancestorLockWaitCannotExtendTheValidityOfABoundFact()throws Exception{
+        long start=System.currentTimeMillis();var time=new java.util.concurrent.atomic.AtomicLong(start);
+        var clock=new java.time.Clock(){public java.time.ZoneId getZone(){return java.time.ZoneOffset.UTC;}public java.time.Clock withZone(java.time.ZoneId z){return this;}public java.time.Instant instant(){return java.time.Instant.ofEpochMilli(time.get());}};
+        var timed=new JdbcCoordinationStore(jdbc,jdbc.getDataSource(),new ObjectMapper(),clock);
+        var source=task("source");timed.createTask(source);
+        var observation=new FactObservation("quote","ride.quote","test","query","hash",start,"","",null);
+        timed.recordObservation(source.id(),observation,true,start);
+        var current=timed.task(source.id()).orElseThrow();
+        timed.recordObservation(source.id(),observation.returned(current,"proof",new FactExtractor.Value("ride_quote",Map.of("durationSeconds","60"),start+1000),start),false,start);
+        current=timed.task(source.id()).orElseThrow();var completed=current.next(TaskStatus.COMPLETED,"quote",List.of(),false,start);timed.saveTask(current,completed,"completed");
+        var fact=TaskFacts.of(completed).get(0);
+        var leaf=new TaskRecord("leaf","root","g",1,new TaskSpec("leaf","domain","followup",null,List.of(source.id()),TaskScope.REQUEST_APPROVAL,
+                List.of(new InputBinding(source.id(),fact.id(),fact.version(),"quote"))),"leaf-child","v1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,start,start);timed.createTask(leaf);
+        var pool=Executors.newSingleThreadExecutor();
+        try(var connection=jdbc.getDataSource().getConnection()){
+            connection.setAutoCommit(false);
+            try(var statement=connection.prepareStatement("SELECT id FROM tasks WHERE id=? FOR UPDATE")){
+                statement.setString(1,source.id());statement.executeQuery().close();
+            }
+            var pending=pool.submit(()->{try{timed.startOperation(leaf,new OperationRecord("op","c","write","h",start,"SUBMITTING",""),start);return false;}catch(TaskFacts.InputUnavailable expired){return expired.invalidation().code()==TaskInvalidation.Code.FACT_EXPIRED;}});
+            boolean waiting=false;long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+            while(System.nanoTime()<deadline){
+                waiting=Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT id FROM tasks WHERE id = %FOR UPDATE')",Boolean.class));
+                if(waiting)break;Thread.sleep(10);
+            }
+            assertThat(waiting).as("submission must reach the ancestor row lock").isTrue();
+            time.set(start+1000);connection.commit();assertThat(pending.get(10,TimeUnit.SECONDS)).isTrue();
+        }finally{pool.shutdownNow();}
+        assertThat(timed.task(leaf.id()).orElseThrow().effectStarted()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM events WHERE type='operation_started'",Integer.class)).isZero();
+    }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
     @Test void unresolvedCredentialScopeBlocksOtherSessionsAndReleasesOnlyWithEvidence(){
         String scope="b".repeat(64);var a=task("a");store.createTask(a);

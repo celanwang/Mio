@@ -50,6 +50,7 @@ public final class TaskRuntime {
         }
         return next;
     }
+    public PlanReview reviewPlan(String session){return PlanReview.of(goal(session),list(session),clock.millis(),store);}
     public GoalRecord goal(String session){return store.goal(session).orElseThrow(()->new IllegalArgumentException("目标不存在"));}
     public Optional<GoalRecord> findGoal(String session){return store.goal(session);}
     public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).toList();}
@@ -60,6 +61,7 @@ public final class TaskRuntime {
         store.saveTask(task,ended,"task_interrupted");return ended;
     }
     private TaskRecord refreshValidity(TaskRecord task){
+        if(task.invalidation()==null&&!task.spec().dependencies().isEmpty()&&(!task.status().terminal()||task.status()==TaskStatus.COMPLETED))task=store.invalidateDependencies(task.id(),clock.millis());
         if(task.status().terminal()||task.status()==TaskStatus.RUNNING)return task;
         boolean changed;
         try{changed=!registry.require(task.spec().capabilityId()).executionVersion().equals(task.capabilityVersion());}
@@ -100,9 +102,9 @@ public final class TaskRuntime {
         boolean waiting=false;
         for(String id:task.spec().dependencies()){
             var dependency=require(task.sessionId(),id);
+            if(dependency.invalidation()!=null)return Mono.just(store.invalidateDependencies(task.id(),clock.millis()));
             if(dependency.status().terminal()&&dependency.status()!=TaskStatus.COMPLETED){
-                var failed=task.next(TaskStatus.FAILED,"依赖任务未完成或结果待核查，已停止后续执行",List.of(),false,clock.millis());
-                store.saveTask(task,failed,"task_dependency_failed");return Mono.just(failed);
+                return Mono.just(store.invalidateDependencies(task.id(),clock.millis()));
             }
             if(dependency.status()!=TaskStatus.COMPLETED)waiting=true;
         }
@@ -162,6 +164,10 @@ public final class TaskRuntime {
                         .onErrorResume(error->{
                             var latest=store.task(task.id()).orElseThrow();
                             if(latest.status()!=TaskStatus.RUNNING)return Mono.just(latest);
+                            if(error instanceof TaskFacts.InputUnavailable){
+                                var invalid=store.invalidateDependencies(task.id(),clock.millis());
+                                if(invalid.invalidation()!=null)return Mono.just(invalid);
+                            }
                             var ended=latest.next(latest.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.FAILED,
                                     error instanceof TaskFacts.InputUnavailable?"任务所需事实不可用："+error.getMessage():"任务执行中断，请核查状态（"+error.getClass().getSimpleName()+"）",List.of(),latest.effectStarted(),clock.millis());
                             store.saveTask(latest,ended,"task_failed");return Mono.just(ended);
@@ -175,6 +181,8 @@ public final class TaskRuntime {
         var current=store.task(id).orElseThrow();if(current.status()!=TaskStatus.RUNNING)return current;
         try{TaskFacts.bind(store,current,clock.millis());}
         catch(TaskFacts.InputUnavailable changed){
+            var invalid=store.invalidateDependencies(id,clock.millis());
+            if(invalid.invalidation()!=null)return invalid;
             var stale=current.next(current.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.STALE,"事实输入已变更，需重新准备任务",List.of(),current.effectStarted(),clock.millis());
             store.saveTask(current,stale,"task_input_invalidated");return stale;
         }

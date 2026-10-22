@@ -12,8 +12,12 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final TransactionTemplate transaction;
+    private final java.time.Clock clock;
     public JdbcCoordinationStore(JdbcTemplate jdbc, DataSource source, ObjectMapper json) {
-        this.jdbc=jdbc;this.json=json;transaction=new TransactionTemplate(new DataSourceTransactionManager(source));
+        this(jdbc,source,json,java.time.Clock.systemUTC());
+    }
+    public JdbcCoordinationStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json,java.time.Clock clock){
+        this.jdbc=jdbc;this.json=json;this.clock=clock;transaction=new TransactionTemplate(new DataSourceTransactionManager(source));
     }
     public void initialize() {
         jdbc.execute("CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, revision BIGINT NOT NULL, content TEXT NOT NULL)");
@@ -74,12 +78,15 @@ public final class JdbcCoordinationStore implements CoordinationStore {
             if(!operation.scopeKey().isEmpty()&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM operation_claims WHERE scope_key=?)",Boolean.class,operation.scopeKey())))throw new IllegalStateException("该账号范围存在未核实操作，禁止跨会话重复提交");
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
             if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
-            for(String source:expected.spec().inputs().stream().map(InputBinding::taskId).distinct().sorted().toList())
+            TaskDependencies.requireReady(this,expected,now);
+            for(String source:TaskDependencies.ancestors(this,expected))
                 jdbc.queryForObject("SELECT id FROM tasks WHERE id = ? FOR UPDATE",String.class,source);
-            TaskFacts.bind(this,expected,now);
+            // Row-lock waits must not freeze the fact's validity at request arrival time.
+            long checkedAt=Math.max(now,clock.millis());
+            TaskFacts.bind(this,expected,checkedAt);
             if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域已有未核查提交，禁止重复操作");
-            saveTask(expected,expected.withOperation(operation,now),"operation_started");
+            saveTask(expected,expected.withOperation(operation,checkedAt),"operation_started");
             if(!operation.scopeKey().isEmpty())jdbc.update("INSERT INTO operation_claims(scope_key,operation_id,task_id,logical_id) VALUES (?,?,?,?)",operation.scopeKey(),operation.id(),expected.id(),operation.logicalId());
         });
     }
@@ -97,6 +104,16 @@ public final class JdbcCoordinationStore implements CoordinationStore {
                     else jdbc.update("DELETE FROM operation_claims WHERE scope_key=? AND operation_id=?",op.scopeKey(),op.id());
                 }
             }
+        });
+    }
+    @Override public TaskRecord invalidateDependencies(String taskId,long now){
+        return transaction.execute(tx->{
+            var original=task(taskId).orElseThrow();
+            jdbc.queryForObject("SELECT revision FROM goals WHERE session_id=? FOR UPDATE",Long.class,original.sessionId());
+            var current=jdbc.queryForObject("SELECT content FROM tasks WHERE id=? FOR UPDATE",(rs,n)->decode(rs.getString(1),TaskRecord.class),taskId);
+            var cause=TaskDependencies.invalidation(this,current,now);
+            if(cause.isEmpty()||current.invalidation()!=null)return current;
+            var next=current.invalidate(cause.get(),now);saveTask(current,next,"task_dependency_invalidated");return next;
         });
     }
     @Override public void recordObservation(String taskId,FactObservation observation,boolean starting,long now){

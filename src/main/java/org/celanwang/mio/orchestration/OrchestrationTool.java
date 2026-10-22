@@ -18,6 +18,7 @@ final class OrchestrationTool extends ToolBase {
     private static String description(String name){return switch(name){
         case "discover_agents"->"发现已注册能力及本地可用性状态。UNAVAILABLE 不委派；PREPARATION_REQUIRED 仅先准备；UNKNOWN 不能声称业务就绪。发现过程不查询真实业务。";
         case "delegate_task"->"按用户目标创建受限任务。key 在目标版本内幂等；PREPARE 仅查询，REQUEST_APPROVAL 仍经审批。dependencies 是前置任务 id；inputs 用来源任务 facts 中的 factId/version 绑定事实，不能编造事实值。";
+        case "review_plan"->"检查当前目标依赖失效范围，返回需刷新来源、需重规划任务和保留任务。只分析已声明依赖，不执行或重试业务动作。";
         case "list_tasks"->"读取当前会话全部任务的真实进度和结果；结果不明不得声称成功。";
         case "continue_task"->"恢复等待依赖的任务，或使用用户最新原话回答该任务的补问。不能用于批准、重试失败或结果不明的操作。";
         case "cancel_task"->"停止任务的后续步骤；已发出的业务请求仍需核查，不自动撤销订单。";
@@ -44,6 +45,7 @@ final class OrchestrationTool extends ToolBase {
         return Mono.defer(()->{
             budget.tool();Map<String,Object> input=call.getInput();
             Mono<?> result=switch(operation){
+                case "review_plan"->Mono.just(runtime.reviewPlan(session));
                 case "discover_agents"->Mono.just(registry.discover());
                 case "list_tasks"->Mono.just(runtime.list(session).stream().map(t->TaskSummary.of(t,registry)).toList());
                 case "delegate_task"->runtime.submit(session,json.convertValue(input,TaskSpec.class),budget).map(t->TaskSummary.of(t,registry));

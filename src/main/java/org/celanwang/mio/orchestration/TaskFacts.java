@@ -5,10 +5,14 @@ import java.util.*;
 /** Evidence projections. Only the latest observation of a key can be consumed. */
 public final class TaskFacts {
     public static final class InputUnavailable extends IllegalStateException {
-        public InputUnavailable(String message){super(message);}
+        private final TaskInvalidation invalidation;
+        public InputUnavailable(String message){super(message);invalidation=null;}
+        public InputUnavailable(TaskInvalidation invalidation){super(invalidation.message());this.invalidation=invalidation;}
+        public TaskInvalidation invalidation(){return invalidation;}
     }
     public record BoundInput(String alias,TaskFact fact) {}
     public static List<TaskFact> of(TaskRecord task){
+        if(task.invalidation()!=null)return List.of();
         List<TaskFact> result=new ArrayList<>();
         var latest=new LinkedHashMap<String,FactObservation>();
         for(var observation:task.observations())latest.put(observation.key(),observation);
@@ -27,6 +31,7 @@ public final class TaskFacts {
     }
     public static List<TaskFact> validAt(TaskRecord task,long now){return of(task).stream().filter(f->f.observedAt()<=now&&now<f.expiresAt()).toList();}
     public static List<BoundInput> bind(CoordinationStore store,TaskRecord target,long now){
+        TaskDependencies.requireReady(store,target,now);
         List<BoundInput> result=new ArrayList<>();
         for(var binding:target.spec().inputs()){
             var source=store.task(binding.taskId()).orElseThrow(()->new InputUnavailable("事实来源任务不存在"));
