@@ -3,6 +3,9 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import re
+import tempfile
 from pathlib import Path
 import sys
 import time
@@ -271,6 +274,34 @@ def cancellation_fee(parameters):
     return {"orderId": order_id, "amountFen": amount, "amountYuan": amount / 100}
 
 
+def write_operation_receipt(account, logical_id, scope_key, result, token):
+    if logical_id is None:
+        return
+    if not isinstance(logical_id, str) or not re.fullmatch(r"[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}", logical_id):
+        raise ValueError("Invalid logical operation id")
+    if not isinstance(scope_key, str) or not re.fullmatch(r"[a-f0-9]{64}", scope_key):
+        raise ValueError("Invalid operation scope")
+    directory = account / "operations"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    target = directory / (logical_id + ".json")
+    data = {"logicalId": logical_id, "scopeKey": scope_key, "receipt": redact(result, token)}
+    fd, temporary = tempfile.mkstemp(prefix="receipt-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Never overwrite an existing logical operation with a different invocation.
+        os.link(temporary, target)
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        os.unlink(temporary)
+
+
 def execute(request):
     command = request.get("command")
     parameters = request.get("parameters", {})
@@ -289,6 +320,15 @@ def execute(request):
         return {"exitCode": 1, "output": {"python_ok": False, "next_actions": ["install_python"]},
                 "error": "PersonalAgent adapter requires Python 3.8 or newer"}
     session, account = initialize(request)
+    if command == "create-order":
+        logical_id = request.get("logicalOperationId")
+        if logical_id is not None:
+            if not isinstance(logical_id, str) or not re.fullmatch(r"[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}", logical_id):
+                raise ValueError("Invalid logical operation id")
+            if (account / "operations" / (logical_id + ".json")).exists():
+                raise ValueError("Operation already has a receipt; reconcile instead of submitting again")
+            if not isinstance(request.get("operationScope"), str) or not re.fullmatch(r"[a-f0-9]{64}", request["operationScope"]):
+                raise ValueError("Invalid operation scope")
     marker = account / "order-attempt.json"
     quote_file = session / "quote.json"
     if command == "select-poi":
@@ -396,6 +436,11 @@ def execute(request):
             elif data.get("hasOnGoingOrder") is False and previous.get("status") == "observed":
                 marker.unlink()
     result["stateVersion"] = state_version()
+    if command == "create-order":
+        try:
+            write_operation_receipt(account, request.get("logicalOperationId"), request.get("operationScope"), result, tms.load_token())
+        except OSError:
+            raise ValueError("Correlated receipt could not be persisted; reconcile manually, never resubmit") from None
     return result
 
 

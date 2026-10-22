@@ -48,6 +48,21 @@ public class TencentRideService {
         return CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"LOCAL_CONFIGURED","本地配置已具备；Python 版本、凭据有效性和业务权限尚未验证，实际使用仍需 preflight");
     }
     private static boolean isExecutableFile(Path path){return Files.isRegularFile(path)&&Files.isExecutable(path);}
+    public String operationScope(){return sessionKey("tencent-ride\0"+properties.getToken().trim());}
+    /** Only reads a correlated local receipt and optionally the current provider order. Never creates an order. */
+    public synchronized String reconcile(String sessionId,String logicalId,String scopeKey)throws IOException{
+        if(!properties.isEnabled()||!operationScope().equals(scopeKey))throw new IllegalStateException("出行账号不可用或已改变，不能核实旧操作");
+        if(!java.util.UUID.fromString(logicalId).toString().equals(logicalId))throw new IllegalArgumentException("逻辑操作编号无效");
+        Path receipt=properties.getDataDirectory().toAbsolutePath().normalize().resolve("accounts").resolve(sessionKey(properties.getToken())).resolve("operations").resolve(logicalId+".json");
+        if(!Files.isRegularFile(receipt))return json.writeValueAsString(Map.of("logicalId",logicalId,"scopeKey",scopeKey,"status","UNKNOWN","reason","CORRELATION_MISSING"));
+        if(Files.size(receipt)>128000)throw new IllegalStateException("关联回执过大，停止核实");
+        com.fasterxml.jackson.databind.JsonNode saved;
+        try{saved=json.copy().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(Files.readString(receipt,StandardCharsets.UTF_8));}
+        catch(IOException unreadable){throw new IllegalStateException("无法读取关联回执，已停止核查",unreadable);}
+        if(!logicalId.equals(saved.path("logicalId").asText())||!scopeKey.equals(saved.path("scopeKey").asText()))throw new IllegalStateException("回执关联不匹配");
+        String observed=execute(sessionId,Map.of("command","query-ongoing-order","parameters",Map.of()));
+        return json.writeValueAsString(Map.of("logicalId",logicalId,"scopeKey",scopeKey,"createReceipt",saved.path("receipt"),"currentOrder",observed));
+    }
 
     // 同一账号串行执行；会话各自保存起终点和报价，不能覆盖另一会话的已确认行程。
     public synchronized String execute(String sessionId, Map<String, Object> input) throws IOException {

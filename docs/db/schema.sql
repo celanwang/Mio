@@ -128,3 +128,13 @@ CREATE TABLE IF NOT EXISTS budget_calls (
     tokens BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_budget_calls_goal ON budget_calls(goal_id);
+
+-- Credential-scope uncertainty fence for explicitly bound operations.
+CREATE TABLE IF NOT EXISTS operation_scopes(id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS operation_claims(
+    scope_key TEXT NOT NULL REFERENCES operation_scopes(id),
+    operation_id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    logical_id TEXT NOT NULL UNIQUE,
+    PRIMARY KEY(scope_key,operation_id)
+);

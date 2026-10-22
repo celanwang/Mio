@@ -51,6 +51,9 @@ public final class TaskExecution {
         if(approved.containsKey(call.getId())&&!humanApproved(call,contractHash))throw new IllegalStateException("调用参数或工具契约已改变，本次批准失效");
     }
     public synchronized String beforeEffect(ToolUseBlock call,String contractHash){
+        return beforeEffect(call,contractHash,"");
+    }
+    public synchronized String beforeEffect(ToolUseBlock call,String contractHash,String scopeKey){
         var task=businessActive();
         if(task.spec().scope()!=TaskScope.REQUEST_APPROVAL)throw new IllegalStateException("当前任务仅允许查询与准备");
         if(task.effectStarted())throw new IllegalStateException("已有提交记录，需核查结果，禁止重复提交");
@@ -59,9 +62,10 @@ public final class TaskExecution {
         if(!org.celanwang.mio.config.ToolPolicies.isJevReviewable(call.getName(),call.getInput())&&!humanApproved(call,contractHash))
             throw new IllegalStateException("当前写操作缺少本次人工批准");
         String id=task.id()+":"+call.getId();
-        var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","");
+        var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scopeKey);
         store.startOperation(task,operation,clock.millis());return id;
     }
+    public OperationRecord operation(String id){return store.task(taskId).orElseThrow().operations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow();}
     public synchronized void effectReturned(String id,String output){effectReturned(id,output,"SUCCESS");}
     public synchronized void effectReturned(String id,String output,String frameworkState){
         var task=store.task(taskId).orElseThrow();

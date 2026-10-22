@@ -74,9 +74,10 @@ public class MultiAgentConfig {
         return new DomainAgentFactory(definitions,c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json);
     }
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}
+    @Bean OperationReconciler tencentOperationReconciler(TencentRideService service){return new TencentOperationReconciler(service);}
     @Bean TaskRuntime taskRuntime(JdbcCoordinationStore store,AgentRegistry registry,DomainAgentFactory factory,PolicyEngine policy,List<OperationVerifier> verifiers,
-                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks){
-        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers);
+                                  @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers){
+        return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers);
     }
     @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json){
         return new SupervisorFactory(model,states,registry,runtime,json);

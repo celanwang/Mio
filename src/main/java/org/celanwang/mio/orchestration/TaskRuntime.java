@@ -17,13 +17,18 @@ public final class TaskRuntime {
     private final Clock clock;
     private final int maxTasks;
     private final List<OperationVerifier> verifiers;
+    private final List<OperationReconciler> reconcilers;
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
         this(store,registry,worker,policy,clock,maxTasks,List.of());
     }
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers){
+        this(store,registry,worker,policy,clock,maxTasks,verifiers,List.of());
+    }
+    public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks,List<OperationVerifier> verifiers,List<OperationReconciler> reconcilers){
         this.store=store;this.registry=registry;this.worker=worker;this.policy=policy;this.clock=clock;this.maxTasks=maxTasks;
         this.verifiers=List.copyOf(verifiers);
+        this.reconcilers=List.copyOf(reconcilers);
     }
     public GoalRecord captureUser(String session,String text){
         if(session==null||session.isBlank()||session.length()>200||text==null||text.isBlank()||text.length()>10000)
@@ -217,5 +222,15 @@ public final class TaskRuntime {
         var next=old.next(old.effectStarted()?TaskStatus.UNKNOWN:TaskStatus.CANCELLED,
                 old.effectStarted()?"请求可能已发出，请先核查实际业务状态":"已停止后续执行",List.of(),old.effectStarted(),clock.millis());
         store.saveTask(old,next,"task_cancelled");return next;
+    }
+    public Mono<TaskRecord> reconcile(String session,String taskId,String operationId,RunBudget budget){
+        return Mono.defer(()->{
+            var task=require(session,taskId);
+            if(task.status()==TaskStatus.RUNNING||!task.effectStarted())throw new IllegalStateException("操作仍在执行或尚未提交，不能核查");
+            var op=task.operations().stream().filter(o->o.id().equals(operationId)).findFirst().orElseThrow(()->new IllegalArgumentException("操作不存在"));
+            var adapter=reconcilers.stream().filter(r->r.supports(op)).findFirst().orElseThrow(()->new IllegalStateException("该操作暂无可信关联核查能力，禁止重发"));
+            budget.tool();
+            return adapter.reconcile(task,op).map(receipt->{store.recordReceipt(taskId,operationId,receipt,clock.millis());return require(session,taskId);});
+        });
     }
 }

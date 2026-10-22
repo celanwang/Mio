@@ -19,6 +19,8 @@ public final class JdbcCoordinationStore implements CoordinationStore {
         jdbc.execute("CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, revision BIGINT NOT NULL, content TEXT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, task_key TEXT NOT NULL, revision BIGINT NOT NULL, content TEXT NOT NULL, UNIQUE(session_id, goal_revision, task_key))");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS operation_scopes(id TEXT PRIMARY KEY)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS operation_claims(scope_key TEXT NOT NULL REFERENCES operation_scopes(id), operation_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id), logical_id TEXT NOT NULL UNIQUE, PRIMARY KEY(scope_key,operation_id))");
     }
     private String encode(Object value) {
         try {return json.writeValueAsString(value);} catch(Exception e){throw new IllegalStateException("协作状态序列化失败",e);}
@@ -68,6 +70,8 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     }
     @Override public void startOperation(TaskRecord expected, OperationRecord operation, long now) {
         transaction.executeWithoutResult(tx->{
+            lockScope(operation.scopeKey());
+            if(!operation.scopeKey().isEmpty()&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM operation_claims WHERE scope_key=?)",Boolean.class,operation.scopeKey())))throw new IllegalStateException("该账号范围存在未核实操作，禁止跨会话重复提交");
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
             if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
             for(String source:expected.spec().inputs().stream().map(InputBinding::taskId).distinct().sorted().toList())
@@ -76,14 +80,29 @@ public final class JdbcCoordinationStore implements CoordinationStore {
             if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域已有未核查提交，禁止重复操作");
             saveTask(expected,expected.withOperation(operation,now),"operation_started");
+            if(!operation.scopeKey().isEmpty())jdbc.update("INSERT INTO operation_claims(scope_key,operation_id,task_id,logical_id) VALUES (?,?,?,?)",operation.scopeKey(),operation.id(),expected.id(),operation.logicalId());
         });
     }
     @Override public void recordReceipt(String taskId,String operationId,OperationReceipt receipt,long now){
         transaction.executeWithoutResult(tx->{
+            var original=task(taskId).orElseThrow().operations().stream().filter(o->o.id().equals(operationId)).findFirst().orElseThrow();
+            lockScope(original.scopeKey());
             var current=jdbc.queryForObject("SELECT content FROM tasks WHERE id = ? FOR UPDATE",(rs,n)->decode(rs.getString(1),TaskRecord.class),taskId);
             var next=current.withReceipt(operationId,receipt,now);
-            if(next!=current)saveTask(current,next,"operation_receipt");
+            if(next!=current){
+                saveTask(current,next,"operation_receipt");
+                var op=next.operations().stream().filter(o->o.id().equals(operationId)).findFirst().orElseThrow();
+                if(!op.scopeKey().isEmpty()){
+                    if(op.outcome()==OperationOutcome.UNKNOWN)jdbc.update("INSERT INTO operation_claims(scope_key,operation_id,task_id,logical_id) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",op.scopeKey(),op.id(),taskId,op.logicalId());
+                    else jdbc.update("DELETE FROM operation_claims WHERE scope_key=? AND operation_id=?",op.scopeKey(),op.id());
+                }
+            }
         });
+    }
+    private void lockScope(String scope){
+        if(scope.isEmpty())return;
+        jdbc.update("INSERT INTO operation_scopes(id) VALUES (?) ON CONFLICT DO NOTHING",scope);
+        jdbc.queryForObject("SELECT id FROM operation_scopes WHERE id=? FOR UPDATE",String.class,scope);
     }
     private void event(String session, String type, String id, Object value) {
         jdbc.update("INSERT INTO events(id, ts, session_id, node, type, title, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",

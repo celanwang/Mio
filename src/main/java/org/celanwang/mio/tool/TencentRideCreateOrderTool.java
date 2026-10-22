@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** 下单使用独立的扁平参数，避免把接口字段或确认摘要塞进通用 parameters。 */
-public class TencentRideCreateOrderTool extends ToolBase {
+public class TencentRideCreateOrderTool extends ToolBase implements org.celanwang.mio.orchestration.OperationBoundTool {
     public static final String NAME = "tencent_ride_create_order";
     private static final Set<String> FIELDS = Set.of("price_estimate_keys", "user_prefer_labels", "stateVersion", "summary");
     private final TencentRideService service;
@@ -69,6 +69,11 @@ public class TencentRideCreateOrderTool extends ToolBase {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam call) {
+        return execute(call,null,null);
+    }
+    @Override public String operationScope(){return service.operationScope();}
+    @Override public Mono<ToolResultBlock> callWithOperation(ToolCallParam call,String logicalId,String scopeKey){return execute(call,logicalId,scopeKey);}
+    private Mono<ToolResultBlock> execute(ToolCallParam call,String logicalId,String scopeKey){
         return Mono.fromCallable(() -> {
             String error = validationError(call.getInput());
             if (error != null) return ToolResultBlock.text(error);
@@ -78,8 +83,12 @@ public class TencentRideCreateOrderTool extends ToolBase {
             if (input.get("user_prefer_labels") instanceof List<?> labels) {
                 parameters.put("user_prefer_labels", labels.stream().map(value -> ((Number) value).intValue()).toList());
             }
-            Map<String, Object> request = Map.of("command", "create-order", "parameters", parameters,
-                    "stateVersion", input.get("stateVersion"), "summary", input.get("summary"));
+            Map<String, Object> request = new LinkedHashMap<>(Map.of("command", "create-order", "parameters", parameters,
+                    "stateVersion", input.get("stateVersion"), "summary", input.get("summary")));
+            if(logicalId!=null){
+                if(!service.operationScope().equals(scopeKey))throw new IllegalStateException("账号配置已改变，请重新准备操作");
+                request.put("logicalOperationId",logicalId);request.put("operationScope",scopeKey);
+            }
             String session = call.getRuntimeContext() == null ? null : call.getRuntimeContext().getSessionId();
             return ToolResultBlock.text(service.execute(session, request));
         }).subscribeOn(Schedulers.boundedElastic());

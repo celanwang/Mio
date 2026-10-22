@@ -21,9 +21,11 @@ final class OrchestrationTool extends ToolBase {
         case "list_tasks"->"读取当前会话全部任务的真实进度和结果；结果不明不得声称成功。";
         case "continue_task"->"恢复等待依赖的任务，或使用用户最新原话回答该任务的补问。不能用于批准、重试失败或结果不明的操作。";
         case "cancel_task"->"停止任务的后续步骤；已发出的业务请求仍需核查，不自动撤销订单。";
+        case "reconcile_operation"->"只核查已有操作的关联回执及业务查询，不重新提交。taskId/operationId 必须来自当前会话任务记录；无关联证据时保持未知。";
         default->throw new IllegalArgumentException(name);
     };}
     private static Map<String,Object> schema(String name){
+        if(name.equals("reconcile_operation"))return Map.of("type","object","properties",Map.of("taskId",Map.of("type","string"),"operationId",Map.of("type","string")),"required",List.of("taskId","operationId"),"additionalProperties",false);
         if(name.equals("delegate_task"))return Map.of("type","object","properties",Map.of(
                 "key",Map.of("type","string"),"capabilityId",Map.of("type","string"),"objective",Map.of("type","string"),
                 "constraints",Map.of("type","array","items",Map.of("type","string")),
@@ -46,6 +48,7 @@ final class OrchestrationTool extends ToolBase {
                 case "delegate_task"->runtime.submit(session,json.convertValue(input,TaskSpec.class),budget).map(t->TaskSummary.of(t,registry));
                 case "continue_task"->runtime.continueTask(session,(String)input.get("taskId"),budget).map(t->TaskSummary.of(t,registry));
                 case "cancel_task"->Mono.fromSupplier(()->TaskSummary.of(runtime.cancel(session,(String)input.get("taskId")),registry));
+                case "reconcile_operation"->runtime.reconcile(session,(String)input.get("taskId"),(String)input.get("operationId"),budget).map(t->TaskSummary.of(t,registry));
                 default->Mono.error(new IllegalArgumentException("未知任务管理操作"));
             };
             return result.map(value->{try{return ToolResultBlock.text(json.writeValueAsString(value));}catch(Exception e){throw new IllegalStateException("结果编码失败",e);}});

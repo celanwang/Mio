@@ -92,6 +92,32 @@ class JdbcPostgresIntegrationTest {
         store.startOperation(createSecond(),new OperationRecord("other","other","write","h",5,"SUBMITTING",""),5);
     }
     private TaskRecord createSecond(){var next=task("b");store.createTask(next);return next;}
+    @Test void unresolvedCredentialScopeBlocksOtherSessionsAndReleasesOnlyWithEvidence(){
+        String scope="b".repeat(64);var a=task("a");store.createTask(a);
+        var first=new OperationRecord("op-a","a","write","h",1,"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scope);
+        store.startOperation(a,first,1);store.createGoal(new GoalRecord("other","other",1,"intent","intent",0,0));
+        var b=new TaskRecord("b","other","other",1,new TaskSpec("b","domain","goal",null,null,TaskScope.REQUEST_APPROVAL),"child","v1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,0,0);store.createTask(b);
+        var second=new OperationRecord("op-b","b","write","h",1,"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scope);
+        assertThatThrownBy(()->store.startOperation(b,second,2)).isInstanceOf(IllegalStateException.class);
+        jdbc.execute("ALTER TABLE events ADD CONSTRAINT reject_scope_receipt CHECK(type <> 'operation_receipt')");
+        assertThatThrownBy(()->store.recordReceipt("a","op-a",new OperationReceipt("p","test","SUCCESS","raw",OperationOutcome.CONFIRMED_APPLIED,"order",3),3)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation_claims",Integer.class)).isEqualTo(1);
+        jdbc.execute("ALTER TABLE events DROP CONSTRAINT reject_scope_receipt");store.recordReceipt("a","op-a",new OperationReceipt("p","test","SUCCESS","raw",OperationOutcome.CONFIRMED_APPLIED,"order",3),3);
+        store.startOperation(b,second,4);assertThat(store.task("b").orElseThrow().effectStarted()).isTrue();
+    }
+    @Test void simultaneousSessionsCannotBothClaimTheSameCredentialScope()throws Exception{
+        var a=task("a");store.createTask(a);store.createGoal(new GoalRecord("other","other",1,"intent","intent",0,0));
+        var b=new TaskRecord("b","other","other",1,new TaskSpec("b","domain","goal",null,null,TaskScope.REQUEST_APPROVAL),"child","v1",TaskStatus.RUNNING,"",null,List.of(),false,List.of(),0,0,0);store.createTask(b);
+        var wins=new AtomicInteger();var barrier=new CyclicBarrier(2);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var jobs=List.of(a,b).stream().map(t->pool.submit(()->{
+                barrier.await(5,TimeUnit.SECONDS);
+                try{store.startOperation(t,new OperationRecord("op-"+t.id(),"c","write","h",1,"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),"a".repeat(64)),1);wins.incrementAndGet();}
+                catch(IllegalStateException rejected){assertThat(rejected).hasMessageContaining("跨会话");}return true;
+            })).toList();for(var job:jobs)job.get(10,TimeUnit.SECONDS);
+        }finally{pool.shutdownNow();}
+        assertThat(wins.get()).isEqualTo(1);assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation_claims",Integer.class)).isEqualTo(1);
+    }
     private JdbcGoalBudgetStore budgets(){var budgets=new JdbcGoalBudgetStore(jdbc,jdbc.getDataSource(),new ObjectMapper());budgets.initialize();return budgets;}
     @Test void budgetQuotaSurvivesNewStoreInstancesAndConcurrentReservations()throws Exception{
         var budgets=budgets();var limits=new GoalBudgetStore.Limits(1,2,2,100);budgets.open("g",limits);
