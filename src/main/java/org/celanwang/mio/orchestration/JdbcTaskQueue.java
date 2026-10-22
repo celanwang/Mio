@@ -54,6 +54,7 @@ public final class JdbcTaskQueue implements TaskQueue {
             if(entry.state()!=State.READY)throw new IllegalStateException("队列任务已被领取或启动");
             if(task.spec().scope()!=TaskScope.PREPARE||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED||task.effectStarted())throw new IllegalStateException("队列执行范围无效");
             if(store.goal(task.sessionId()).orElseThrow().revision()!=task.goalRevision())throw new IllegalStateException("排队任务目标版本已改变");
+            store.goal(task.sessionId()).orElseThrow().requireActive();
             TaskDependencies.requireReady(store,task,now());
             if(entry.attempts()>=3){
                 store.saveTask(task,task.next(TaskStatus.FAILED,"队列领取次数已达上限，请重新规划",List.of(),false,now()),"queue_claim_limit");
@@ -72,6 +73,7 @@ public final class JdbcTaskQueue implements TaskQueue {
             if(entry.state()!=State.CLAIMED||!current.equals(expected)||current.status()!=TaskStatus.QUEUED||!running.equals(current.start(claim.lease(),running.updatedAt()))
                     ||!Objects.equals(running.executionLease(),claim.lease()))throw new IllegalStateException("队列任务不可启动");
             if(store.goal(current.sessionId()).orElseThrow().revision()!=current.goalRevision())throw new IllegalStateException("排队任务目标版本已改变");
+            store.goal(current.sessionId()).orElseThrow().requireActive();
             TaskDependencies.requireReady(store,current,now());
             store.saveTask(current,running,"task_running");change(entry,State.STARTED,entry.attempts(),entry.claimId(),entry.lease(),"STARTED_NO_REPLAY","queue_started");
         });return null;});

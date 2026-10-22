@@ -159,3 +159,6 @@ CREATE TABLE IF NOT EXISTS task_queue(
     content TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_queue_session ON task_queue(session_id,state);
+
+-- Goal control changes do not append fake user turns or reset the intent revision/budget.
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS control_revision BIGINT NOT NULL DEFAULT 0;

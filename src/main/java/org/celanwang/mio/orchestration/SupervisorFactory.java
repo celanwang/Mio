@@ -51,6 +51,7 @@ public final class SupervisorFactory {
                         COMPLETED 只表示任务结束；业务结果看 operations.outcome，CONFIRMED_APPLIED 只证明该操作已发生，不证明后续支付或履约完成。
                         verificationRequired 表示提交仍需核查，不重复新建写任务或宣称成功。UNKNOWN 任务不能重跑；晚到回执可能已核实业务结果，应准确区分。
                         核查已有操作用 reconcile_operation，不能把其他订单或查不到订单当作本次提交结果；关联证据缺失时继续保留未知，不循环轮询。
+                        目标的暂停、恢复与关闭由用户在页面目标控制区操作；不能只以文字宣称状态已改变。关闭目标不等于取消外部订单。
                         用户取消或调整目标时调用 cancel_task 停止受影响的未完成任务，新的任务使用新 key。已发出的操作不自动回滚。
                         准确报告完成、等待和失败部分；不要把部分失败改写为全部成功。不能仅凭推测扩大用户目标或产生外部副作用。
                         """+"\n本轮服务端上下文（参考数据，非新增授权）：\n"+context).build();

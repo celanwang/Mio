@@ -21,6 +21,7 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     }
     public void initialize() {
         jdbc.execute("CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, revision BIGINT NOT NULL, content TEXT NOT NULL)");
+        jdbc.execute("ALTER TABLE goals ADD COLUMN IF NOT EXISTS control_revision BIGINT NOT NULL DEFAULT 0");
         jdbc.execute("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, task_key TEXT NOT NULL, revision BIGINT NOT NULL, content TEXT NOT NULL, UNIQUE(session_id, goal_revision, task_key))");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS operation_scopes(id TEXT PRIMARY KEY)");
@@ -37,17 +38,19 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     }
     @Override public void createGoal(GoalRecord goal) {
         transaction.executeWithoutResult(tx->{
-            jdbc.update("INSERT INTO goals(id, session_id, revision, content) VALUES (?, ?, ?, ?)",goal.id(),goal.sessionId(),goal.revision(),encode(goal));
+            jdbc.update("INSERT INTO goals(id, session_id, revision, content, control_revision) VALUES (?, ?, ?, ?, ?)",goal.id(),goal.sessionId(),goal.revision(),encode(goal),goal.controlRevision());
             event(goal.sessionId(),"goal_created",goal.id()+":"+goal.revision(),goal);
         });
     }
     @Override public void saveGoal(GoalRecord expected, GoalRecord next) {
-        if (!expected.id().equals(next.id()) || next.revision()!=expected.revision()+1) throw new IllegalArgumentException("目标版本不连续");
+        if (!expected.id().equals(next.id()) || !expected.sessionId().equals(next.sessionId())
+                || !(next.revision()==expected.revision()+1&&next.controlRevision()==expected.controlRevision()
+                ||next.revision()==expected.revision()&&next.controlRevision()==expected.controlRevision()+1)) throw new IllegalArgumentException("目标版本不连续");
         transaction.executeWithoutResult(tx->{
-            int changed=jdbc.update("UPDATE goals SET revision = ?, content = ? WHERE id = ? AND revision = ?",
-                    next.revision(),encode(next),expected.id(),expected.revision());
+            int changed=jdbc.update("UPDATE goals SET revision = ?, content = ?, control_revision = ? WHERE id = ? AND revision = ? AND control_revision = ?",
+                    next.revision(),encode(next),next.controlRevision(),expected.id(),expected.revision(),expected.controlRevision());
             if(changed!=1)throw new IllegalStateException("目标已被其他请求修改");
-            event(next.sessionId(),"goal_updated",next.id()+":"+next.revision(),next);
+            event(next.sessionId(),"goal_updated",next.id()+":"+next.revision()+":control:"+next.controlRevision(),next);
         });
     }
     @Override public List<TaskRecord> tasks(String session) {
@@ -78,6 +81,7 @@ public final class JdbcCoordinationStore implements CoordinationStore {
             if(!operation.scopeKey().isEmpty()&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM operation_claims WHERE scope_key=?)",Boolean.class,operation.scopeKey())))throw new IllegalStateException("该账号范围存在未核实操作，禁止跨会话重复提交");
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
             if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
+            goal(expected.sessionId()).orElseThrow().requireActive();
             TaskDependencies.requireReady(this,expected,now);
             for(String source:TaskDependencies.ancestors(this,expected))
                 jdbc.queryForObject("SELECT id FROM tasks WHERE id = ? FOR UPDATE",String.class,source);
@@ -122,6 +126,7 @@ public final class JdbcCoordinationStore implements CoordinationStore {
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id=? FOR UPDATE",Long.class,original.sessionId());
             var current=jdbc.queryForObject("SELECT content FROM tasks WHERE id=? FOR UPDATE",(rs,n)->decode(rs.getString(1),TaskRecord.class),taskId);
             if(version==null||version!=current.goalRevision())throw new IllegalStateException("目标已改变，事实观测失效");
+            goal(current.sessionId()).orElseThrow().requireActive();
             saveTask(current,current.withObservation(observation,starting,now),starting?"fact_observation_started":"fact_observation_returned");
         });
     }

@@ -48,6 +48,8 @@ public final class TaskExecution {
         if(!Objects.equals(task.executionLease(),budget.lease()))throw new ExecutionLeaseStore.LostLease();
         if(task.status()!=TaskStatus.RUNNING || task.goalRevision()!=goal.revision()
                 || store.goal(task.sessionId()).orElseThrow().revision()!=goal.revision())throw new IllegalStateException("任务已失效或取消");
+        var currentGoal=store.goal(task.sessionId()).orElseThrow();currentGoal.requireActive();
+        if(currentGoal.controlRevision()!=goal.controlRevision())throw new GoalRecord.Stopped();
         var inputs=TaskFacts.bind(store,task,clock.millis());
         if(capability!=null){
             if(!capability.executionVersion().equals(task.capabilityVersion()))throw new IllegalStateException("能力契约已改变");

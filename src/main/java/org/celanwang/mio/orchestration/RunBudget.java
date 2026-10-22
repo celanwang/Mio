@@ -19,6 +19,8 @@ public final class RunBudget {
     private final AtomicInteger models = new AtomicInteger(), tools = new AtomicInteger(), tasks = new AtomicInteger();
     private final AtomicLong tokens = new AtomicLong();
     private volatile boolean tokenUsageComplete = true;
+    private Runnable goalGuard=()->{};
+    public void bindGoalGuard(Runnable guard){guard.run();this.goalGuard=java.util.Objects.requireNonNull(guard);}
     private ExecutionLeaseStore leases;
     private ExecutionLeaseStore.Token lease;
     public synchronized void bindLease(ExecutionLeaseStore store,ExecutionLeaseStore.Token token){
@@ -43,7 +45,7 @@ public final class RunBudget {
         if(this.ledger!=null||models.get()!=0||tools.get()!=0||tasks.get()!=0)throw new IllegalStateException("预算必须在执行前绑定一次");
         ledger.open(goalId,limits,historyUnknown);this.ledger=ledger;this.goalId=goalId;
     }
-    public void active() { if (clock.millis() >= deadline) throw new BudgetExceeded("本轮执行时间预算已耗尽"); if(leases!=null)leases.require(lease); }
+    public void active() { if (clock.millis() >= deadline) throw new BudgetExceeded("本轮执行时间预算已耗尽"); if(leases!=null)leases.require(lease); goalGuard.run(); }
     private void consume(AtomicInteger counter,int maximum,String name,GoalBudgetStore.Kind kind) {
         active();counter.updateAndGet(value->{if(value>=maximum)throw new BudgetExceeded(name+"本轮预算已耗尽");return value+1;});
         if(ledger!=null)ledger.reserve(goalId,kind);

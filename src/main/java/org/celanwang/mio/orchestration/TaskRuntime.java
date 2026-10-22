@@ -72,7 +72,8 @@ public final class TaskRuntime {
         if(queue!=null&&t.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(t.id());return t;
     }).toList();}
     public TaskSummary summary(TaskRecord task){return TaskSummary.of(task,registry,queue==null||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED?null:
-            TaskQueue.View.of(queue.find(task.id()).orElseThrow(()->new IllegalStateException("排队任务缺少队列记录"))));}
+            TaskQueue.View.of(queue.find(task.id()).orElseThrow(()->new IllegalStateException("排队任务缺少队列记录"))))
+            .withReconcilable(task.status()==TaskStatus.RUNNING?List.of():task.operations().stream().filter(op->op.outcome()==OperationOutcome.UNKNOWN).filter(op->reconcilers.stream().anyMatch(r->r.supports(op))).map(OperationRecord::id).toList());}
     private TaskRecord recoverInterrupted(TaskRecord task){
         if(task.status()!=TaskStatus.RUNNING)return task;
         if(leases==null?owners.containsKey(task.id()):leases.valid(task.executionLease()))return task;
@@ -99,7 +100,7 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> submit(String session,TaskSpec spec,RunBudget budget){
         return Mono.defer(()->{
-            requireLease(session,budget);
+            requireLease(session,budget);goal(session).requireActive();
             var capability=registry.require(spec.capabilityId());capability.validateSpec(spec);var goal=goal(session);var existing=budget.fenced(()->list(session));
             var same=existing.stream().filter(t->t.goalRevision()==goal.revision()&&t.spec().key().equals(spec.key())).findFirst();
             if(same.isPresent()){
@@ -136,7 +137,7 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> continueTask(String session,String id,RunBudget budget){
         return Mono.defer(()->{
-            requireLease(session,budget);
+            requireLease(session,budget);goal(session).requireActive();
             var task=budget.fenced(()->require(session,id));var goal=goal(session);
             if(task.status()==TaskStatus.QUEUED)return runQueuedTask(session,id,budget);
             if(task.status()==TaskStatus.RUNNING){
@@ -157,7 +158,7 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> runQueuedTask(String session,String id,RunBudget budget){
         return Mono.defer(()->{
-            requireLease(session,budget);if(queue==null)throw new IllegalStateException("准备任务队列未启用");
+            requireLease(session,budget);goal(session).requireActive();if(queue==null)throw new IllegalStateException("准备任务队列未启用");
             budget.fenced(()->list(session));var task=budget.fenced(()->require(session,id));
             if(task.status()!=TaskStatus.QUEUED||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED)throw new IllegalStateException("任务不在等待领取的准备队列中");
             registry.status(task.spec().capabilityId()).requireExecution();
@@ -172,7 +173,7 @@ public final class TaskRuntime {
     }
     public Mono<TaskRecord> answerTask(String session,String id,String questionId,String text,RunBudget budget){
         return Mono.defer(()->{
-            requireLease(session,budget);
+            requireLease(session,budget);goal(session).requireActive();
             var task=budget.fenced(()->require(session,id));var goal=goal(session);
             var ready=task.answered(goal,questionId,text,clock.millis());
             TaskFacts.bind(store,ready,clock.millis());
@@ -248,7 +249,7 @@ public final class TaskRuntime {
     }
     public Mono<List<TaskRecord>> approve(String session,List<ChatRequest.Confirmation> decisions,RunBudget budget){
         return Mono.defer(()->{
-            requireLease(session,budget);
+            requireLease(session,budget);goal(session).requireActive();
             if(decisions==null||decisions.isEmpty())throw new IllegalArgumentException("批准结果为空");
             var tasks=budget.fenced(()->list(session));var index=new HashMap<String,TaskRecord>();
             tasks.forEach(t->t.approvals().forEach(a->index.put(a.id(),t)));

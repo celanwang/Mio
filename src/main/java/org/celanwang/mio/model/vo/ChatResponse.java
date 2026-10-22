@@ -22,6 +22,11 @@ public class ChatResponse {
     private boolean multiAgent;
     private org.celanwang.mio.orchestration.GoalBudgetStore.Snapshot budget;
 
+    private org.celanwang.mio.orchestration.GoalOverview goal;
+    public ChatResponse(String sessionId,String reply,List<ToolConfirmation> pendingConfirmations,WeiboAction weiboAction,
+                        java.util.List<org.celanwang.mio.orchestration.TaskSummary> tasks,boolean multiAgent,org.celanwang.mio.orchestration.GoalBudgetStore.Snapshot budget){
+        this(sessionId,reply,pendingConfirmations,weiboAction,tasks,multiAgent,budget,null);
+    }
     public ChatResponse(String sessionId,String reply,List<ToolConfirmation> pendingConfirmations,WeiboAction weiboAction,
                         java.util.List<org.celanwang.mio.orchestration.TaskSummary> tasks,boolean multiAgent){
         this(sessionId,reply,pendingConfirmations,weiboAction,tasks,multiAgent,null);

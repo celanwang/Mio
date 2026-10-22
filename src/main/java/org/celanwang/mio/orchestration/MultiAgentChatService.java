@@ -70,6 +70,8 @@ public final class MultiAgentChatService {
                     budget.fenced(()->runtime.captureUser(session,request.getMessage()));
                     traces.append(session,"user","user","用户消息",request.getMessage());prepare=Mono.empty();
                 }
+                var activeGoal=runtime.goal(session);activeGoal.requireActive();
+                budget.bindGoalGuard(()->{var current=runtime.goal(session);current.requireActive();if(current.controlRevision()!=activeGoal.controlRevision())throw new GoalRecord.Stopped();});
                 if(budgetStore!=null)budget.bind(budgetStore,runtime.goal(session).id(),goalLimits,existingGoal);
                 return prepare.then(Mono.defer(()->Mono.using(()->{
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
@@ -102,12 +104,23 @@ public final class MultiAgentChatService {
             return result.doOnSuccess(v->running.remove(session,owner)).doOnError(e->running.remove(session,owner)).doFinally(s->running.remove(session,owner));
         }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
     }
+    /** Operator reads remain possible for stopped goals. This path never invokes a model or submits an order. */
+    public Mono<ChatResponse> reconcile(String session,String taskId,String operationId){
+        return Mono.defer(()->{
+            if(leases==null)throw new IllegalStateException("关联核查缺少持久会话租约");
+            var budget=new RunBudget(limits,clock);
+            return Mono.using(()->{var token=leases.acquire(session,Math.addExact(limits.millis(),5000));budget.bindLease(leases,token);return token;},token->{
+                var goal=runtime.goal(session);if(budgetStore!=null)budget.bind(budgetStore,goal.id(),goalLimits,true);
+                return runtime.reconcile(session,taskId,operationId,budget).map(task->response(session,"核查结果已写入操作记录；本任务不会重跑。"));
+            },leases::release).timeout(Duration.ofMillis(limits.millis()+1000));
+        }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
+    }
     public ChatResponse response(String session,String text){
         var tasks=runtime.list(session);List<ToolConfirmation> calls=new ArrayList<>();
         for(var task:tasks)if(task.status()==TaskStatus.AWAITING_APPROVAL)for(var a:task.approvals())if(a.decision()==null&&a.expiresAt()>clock.millis())
             calls.add(new ToolConfirmation(a.id(),a.tool(),a.description(),a.input(),true,a.contractHash(),task.id(),registry.require(task.spec().capabilityId()).name()));
         WeiboAction action=tasks.stream().filter(t->t.status()==TaskStatus.NEEDS_INPUT&&t.action()!=null).map(TaskRecord::action).findFirst().orElse(null);
         var budget=budgetStore==null?null:runtime.findGoal(session).flatMap(g->budgetStore.find(g.id())).orElse(null);
-        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(runtime::summary).toList(),true,budget);
+        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(runtime::summary).toList(),true,budget,runtime.findGoal(session).map(g->GoalOverview.of(g,tasks)).orElse(null));
     }
 }
