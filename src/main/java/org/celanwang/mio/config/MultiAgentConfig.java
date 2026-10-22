@@ -73,8 +73,9 @@ public class MultiAgentConfig {
     @Bean JdbcTaskQueue taskQueue(JdbcTemplate jdbc,DataSource source,ObjectMapper json,JdbcCoordinationStore store,JdbcExecutionLeaseStore leases){return new JdbcTaskQueue(jdbc,source,json,store,leases);}
     @Bean GoalLifecycle goalLifecycle(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,JdbcTaskQueue queue){return new JdbcGoalLifecycle(jdbc,source,store,queue);}
     @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}
+    @Bean JdbcGoalAcceptance goalAcceptance(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,AgentRegistry registry,ObjectMapper json){return new JdbcGoalAcceptance(jdbc,source,store,registry,json,Clock.systemUTC());}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
-    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();};}
+    ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue,JdbcGoalAcceptance acceptance){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();acceptance.initialize();};}
     @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> definitions,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
@@ -88,8 +89,8 @@ public class MultiAgentConfig {
                                   @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue){
         return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers,factExtractors,leases,queue);
     }
-    @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json){
-        return new SupervisorFactory(model,states,registry,runtime,json);
+    @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json,JdbcGoalAcceptance acceptance){
+        return new SupervisorFactory(model,states,registry,runtime,json,acceptance);
     }
     @Bean MultiAgentChatService multiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,
             @Value("${app.multi-agent.max-model-calls:40}")int models,@Value("${app.multi-agent.max-tool-calls:80}")int tools,
@@ -97,8 +98,8 @@ public class MultiAgentConfig {
             @Value("${app.multi-agent.max-context-characters:100000}")int context,@Value("${app.multi-agent.timeout-ms:150000}")long millis,
             @Value("${app.multi-agent.goal-max-model-calls:160}")int goalModels,@Value("${app.multi-agent.goal-max-tool-calls:320}")int goalTools,
             @Value("${app.multi-agent.goal-max-task-calls:48}")int goalTasks,@Value("${app.multi-agent.goal-max-tokens:320000}")long goalTokens,
-            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases){
+            TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcGoalAcceptance acceptance){
         return new MultiAgentChatService(factory,runtime,registry,new RunBudget.Limits(models,tools,tasks,tokens,context,millis),
-                Clock.systemUTC(),traces,memory,profiles,budgets,new GoalBudgetStore.Limits(goalModels,goalTools,goalTasks,goalTokens),leases);
+                Clock.systemUTC(),traces,memory,profiles,budgets,new GoalBudgetStore.Limits(goalModels,goalTools,goalTasks,goalTokens),leases,acceptance);
     }
 }

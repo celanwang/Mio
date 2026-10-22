@@ -20,6 +20,7 @@ public final class MultiAgentChatService {
     private final MioLongTermMemory memory;private final ProfileStore profiles;
     private final GoalBudgetStore budgetStore;private final GoalBudgetStore.Limits goalLimits;
     private final ExecutionLeaseStore leases;
+    private final JdbcGoalAcceptance acceptance;
     private final Map<String,Object> running=new ConcurrentHashMap<>();
     public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
                                  Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles){
@@ -31,8 +32,13 @@ public final class MultiAgentChatService {
     }
     public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
                                  Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,GoalBudgetStore budgetStore,GoalBudgetStore.Limits goalLimits,ExecutionLeaseStore leases){
+        this(factory,runtime,registry,limits,clock,traces,memory,profiles,budgetStore,goalLimits,leases,null);
+    }
+    public MultiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,RunBudget.Limits limits,
+                                 Clock clock,TraceStore traces,MioLongTermMemory memory,ProfileStore profiles,GoalBudgetStore budgetStore,GoalBudgetStore.Limits goalLimits,ExecutionLeaseStore leases,JdbcGoalAcceptance acceptance){
         if(leases!=null&&limits.millis()>895000)throw new IllegalArgumentException("前台单轮执行最长 895000 毫秒");
         this.leases=leases;
+        this.acceptance=acceptance;
         this.factory=factory;this.runtime=runtime;this.registry=registry;this.limits=limits;this.clock=clock;this.traces=traces;this.memory=memory;this.profiles=profiles;
         this.budgetStore=budgetStore;this.goalLimits=goalLimits;
     }
@@ -116,11 +122,13 @@ public final class MultiAgentChatService {
         }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
     }
     public ChatResponse response(String session,String text){
-        var tasks=runtime.list(session);List<ToolConfirmation> calls=new ArrayList<>();
+        var tasks=runtime.list(session);var goal=runtime.findGoal(session).orElse(null);GoalAcceptanceView assessment=null;
+        if(acceptance!=null){var snapshot=acceptance.snapshot(session);tasks=snapshot.tasks();goal=snapshot.goal();assessment=snapshot.acceptance();}
+        List<ToolConfirmation> calls=new ArrayList<>();
         for(var task:tasks)if(task.status()==TaskStatus.AWAITING_APPROVAL)for(var a:task.approvals())if(a.decision()==null&&a.expiresAt()>clock.millis())
             calls.add(new ToolConfirmation(a.id(),a.tool(),a.description(),a.input(),true,a.contractHash(),task.id(),registry.require(task.spec().capabilityId()).name()));
         WeiboAction action=tasks.stream().filter(t->t.status()==TaskStatus.NEEDS_INPUT&&t.action()!=null).map(TaskRecord::action).findFirst().orElse(null);
-        var budget=budgetStore==null?null:runtime.findGoal(session).flatMap(g->budgetStore.find(g.id())).orElse(null);
-        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(runtime::summary).toList(),true,budget,runtime.findGoal(session).map(g->GoalOverview.of(g,tasks)).orElse(null));
+        var budget=budgetStore==null||goal==null?null:budgetStore.find(goal.id()).orElse(null);
+        return new ChatResponse(session,text==null||text.isBlank()?"请查看下方任务状态。":text,calls,action,tasks.stream().map(runtime::summary).toList(),true,budget,goal==null?null:GoalOverview.of(goal,tasks),assessment);
     }
 }

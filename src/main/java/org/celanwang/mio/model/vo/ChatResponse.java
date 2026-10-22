@@ -23,6 +23,12 @@ public class ChatResponse {
     private org.celanwang.mio.orchestration.GoalBudgetStore.Snapshot budget;
 
     private org.celanwang.mio.orchestration.GoalOverview goal;
+    private org.celanwang.mio.orchestration.GoalAcceptanceView acceptance;
+    public ChatResponse(String sessionId,String reply,List<ToolConfirmation> pendingConfirmations,WeiboAction weiboAction,
+                        java.util.List<org.celanwang.mio.orchestration.TaskSummary> tasks,boolean multiAgent,org.celanwang.mio.orchestration.GoalBudgetStore.Snapshot budget,
+                        org.celanwang.mio.orchestration.GoalOverview goal){
+        this(sessionId,reply,pendingConfirmations,weiboAction,tasks,multiAgent,budget,goal,null);
+    }
     public ChatResponse(String sessionId,String reply,List<ToolConfirmation> pendingConfirmations,WeiboAction weiboAction,
                         java.util.List<org.celanwang.mio.orchestration.TaskSummary> tasks,boolean multiAgent,org.celanwang.mio.orchestration.GoalBudgetStore.Snapshot budget){
         this(sessionId,reply,pendingConfirmations,weiboAction,tasks,multiAgent,budget,null);
