@@ -36,6 +36,7 @@ final class OrchestrationTool extends ToolBase {
                         "taskId",Map.of("type","string"),"factId",Map.of("type","string"),"version",Map.of("type","string"),"alias",Map.of("type","string")),
                         "required",List.of("taskId","factId","version","alias"),"additionalProperties",false)),
                 "inputContract",Map.of("type","string","description","选择 capability.inputContracts 中的契约编号；按 requiredFacts 的别名和类型完整绑定 inputs。"),
+                "outputContract",Map.of("type","string","description","选择 capability.outputContracts 中的契约编号；需要可信报价选 ride-quote，需要已核实创建结果选 resource-reference。report 只表示工作报告。"),
                 "dispatch",Map.of("type","string","enum",List.of("INLINE","QUEUED"),"description","默认 INLINE；QUEUED 仅用于 PREPARE，只入队，不立即执行。"),
                 "scope",Map.of("type","string","enum",List.of("PREPARE","REQUEST_APPROVAL"))),
                 "required",List.of("key","capabilityId","objective"),"additionalProperties",false);

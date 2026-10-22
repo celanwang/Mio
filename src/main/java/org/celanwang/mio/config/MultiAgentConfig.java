@@ -30,6 +30,9 @@ import java.util.*;
 @ConditionalOnProperty(prefix="app.multi-agent",name="enabled",havingValue="true")
 public class MultiAgentConfig {
     private DomainDefinition definition(String id,String name,String description,String skillsDir,java.util.function.Supplier<List<ToolBase>> tools){
+        return definition(id,name,description,skillsDir,tools,List.of(CapabilityOutputContract.report()));
+    }
+    private DomainDefinition definition(String id,String name,String description,String skillsDir,java.util.function.Supplier<List<ToolBase>> tools,List<CapabilityOutputContract> outputs){
         try{
             Path directory=Path.of(skillsDir,id);String prompt=Files.readString(directory.resolve("SKILL.md"));
             var digest=MessageDigest.getInstance("SHA-256");
@@ -40,7 +43,8 @@ public class MultiAgentConfig {
                 }
             }
             return new DomainDefinition(new AgentCapability(id,name,description,id,HexFormat.of().formatHex(digest.digest()),
-                    List.of("查询与准备可自主进行","写操作受任务范围和权限链约束","业务结果需实际回执核查"),CapabilityInputContract.contextual()),prompt,tools);
+                    List.of("查询与准备可自主进行","写操作受任务范围和权限链约束","业务结果需实际回执核查"),CapabilityInputContract.contextual(),
+                    outputs),prompt,tools);
         }catch(Exception e){throw new IllegalStateException("无法读取领域技能："+id,e);}
     }
     @Bean DomainDefinition mcdDomain(@Qualifier("toolkit")Toolkit source,@Value("${app.agent.skills-dir:./skills}")String dir){
@@ -49,7 +53,8 @@ public class MultiAgentConfig {
     }
     @Bean DomainDefinition rideDomain(TencentRideService service,@Value("${app.agent.skills-dir:./skills}")String dir){
         var domain=definition("tencent-ride","出行助手","腾讯即时出行的地点确认、询价、当前订单查询、经人工确认的叫车与取消。",dir,
-                ()->List.of(new TencentRideTool(service),new TencentRideCreateOrderTool(service)));
+                ()->List.of(new TencentRideTool(service),new TencentRideCreateOrderTool(service)),
+                List.of(CapabilityOutputContract.report(),CapabilityOutputContract.rideQuote(),CapabilityOutputContract.resourceReference()));
         return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
     @Bean DomainDefinition weiboDomain(WeiboMcpService service,@Value("${app.agent.skills-dir:./skills}")String dir){

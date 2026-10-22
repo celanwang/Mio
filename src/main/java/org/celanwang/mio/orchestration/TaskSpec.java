@@ -3,8 +3,11 @@ package org.celanwang.mio.orchestration;
 import java.util.List;
 
 public record TaskSpec(String key, String capabilityId, String objective, List<String> constraints,
-                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs,String inputContract,Dispatch dispatch) {
+                       List<String> dependencies, TaskScope scope,List<InputBinding> inputs,String inputContract,Dispatch dispatch,String outputContract) {
     public enum Dispatch { INLINE,QUEUED }
+    public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope,List<InputBinding> inputs,String inputContract,Dispatch dispatch){
+        this(key,capabilityId,objective,constraints,dependencies,scope,inputs,inputContract,dispatch,"report");
+    }
     public TaskSpec(String key,String capabilityId,String objective,List<String> constraints,List<String> dependencies,TaskScope scope,List<InputBinding> inputs,String inputContract){
         this(key,capabilityId,objective,constraints,dependencies,scope,inputs,inputContract,Dispatch.INLINE);
     }
@@ -28,6 +31,8 @@ public record TaskSpec(String key, String capabilityId, String objective, List<S
         if(dispatch==Dispatch.QUEUED&&scope!=TaskScope.PREPARE)throw new IllegalArgumentException("排队执行仅允许准备任务");
         inputContract=inputContract==null?"default":inputContract;
         if(!inputContract.matches("[a-z][a-z0-9-]{0,63}"))throw new IllegalArgumentException("输入契约编号无效");
+        outputContract=outputContract==null?"report":outputContract;
+        if(!outputContract.matches("[a-z][a-z0-9-]{0,63}"))throw new IllegalArgumentException("输出契约编号无效");
         inputs=inputs==null?List.of():List.copyOf(inputs);
         if(inputs.size()>8||inputs.stream().map(InputBinding::alias).distinct().count()!=inputs.size())throw new IllegalArgumentException("事实输入过多或别名重复");
         for(var binding:inputs)if(!dependencies.contains(binding.taskId()))throw new IllegalArgumentException("事实输入必须引用已声明的依赖任务");

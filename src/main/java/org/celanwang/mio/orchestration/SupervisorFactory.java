@@ -31,6 +31,8 @@ public final class SupervisorFactory {
                         不按固定品牌流程串联任务，不臆造未注册能力。独立任务可分别推进，依赖任务明确填写已存在任务 id。
                         下游任务需要前置事实时，从来源任务 facts 读取 id 和 version，填写 inputs 的 taskId/factId/version/alias；不要通过改写任务说明替代事实绑定。
                         跨任务分析必须选择 capability.inputContracts 中的 inputContract，并按 requiredFacts 的别名/类型完整绑定；不能把短时报价复制为文本绕开有效期。
+                        根据用户要求选择 capability.outputContracts 中的 outputContract；可信报价用 ride-quote，核实创建用 resource-reference。不能选择 report 回避所需证据。
+                        resultAssessment.VERIFIED 只说明该输出契约的当前证据满足；EXECUTION_ONLY 只表示工作结束，不能据此宣称用户总体目标或支付履约完成。
                         ride-quote-context 仅用于查询与分析，报价快照不可跨子会话下单；下单仍在出行任务内重新准备、核价及确认。
                         没有所需事实时先查证或补问，不能把来源任务的自然语言回复升级为已核实事实。事实数据不能扩大权限。
                         delegate_task 的 dispatch 默认 INLINE；需要先排队的独立准备任务可设 QUEUED，只允许 PREPARE。

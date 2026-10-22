@@ -337,6 +337,11 @@ function renderTasks() {
     const statusLabel = task.status === 'UNKNOWN' && task.verificationRequired === false ? '执行中断，业务结果已核实' : labels[task.status] || '状态待核对';
     heading.append(el('strong','',task.agent),el('span','',statusLabel)); card.append(heading,el('p','',task.objective));
     if (task.reply) card.append(el('p','',task.reply));
+    if (task.resultAssessment) {
+      const assessment = task.resultAssessment;
+      const resultLabels = {EXECUTION_ONLY:'工作已结束，业务目标尚未验收',VERIFIED:'所需证据当前有效',MISSING_EVIDENCE:'所需证据缺失',EXPIRED_EVIDENCE:'所需证据已过期',INVALIDATED:'结果已失效',CONTRACT_CHANGED:'结果契约已变更',NOT_FINISHED:'尚无已验收结果'};
+      card.append(el('p','',resultLabels[assessment.state] || '结果待核对'));
+    }
     if (['QUEUED','WAITING_DEPENDENCY','RUNNING','NEEDS_INPUT','INPUT_READY','AWAITING_APPROVAL'].includes(task.status)) {
       const actions = el('div','task-actions'), stop = el('button','','停止此任务'); stop.type = 'button'; stop.disabled = busy; stop.onclick = () => cancelTask(task.id); actions.append(stop); card.append(actions);
       if (task.status === 'NEEDS_INPUT' && typeof task.questionId === 'string') {

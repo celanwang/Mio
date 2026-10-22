@@ -31,11 +31,15 @@ final class DomainFixture {
     final List<List<Msg>> inputs=new ArrayList<>();
     final Model model=mock(Model.class);
     final TaskRuntime runtime;
+    final AgentRegistry registry;
     final RunBudget budget=new RunBudget(new RunBudget.Limits(50,100,30,100000,100000,120000),Clock.systemUTC());
     DomainFixture(){
         this(List.of());
     }
     DomainFixture(List<OperationVerifier> verifiers){
+        this(verifiers,List.of(),List.of());
+    }
+    DomainFixture(List<OperationVerifier> verifiers,List<CapabilityOutputContract> outputs,List<FactExtractor> extractors){
         when(model.getModelName()).thenReturn("fake-domain");
         when(model.stream(anyList(),any(),any())).thenAnswer(inv->Flux.defer(()->{
             modelCalls.incrementAndGet();inputs.add(List.copyOf(inv.getArgument(0)));
@@ -44,11 +48,12 @@ final class DomainFixture {
         }));
         @SuppressWarnings("unchecked") ObjectProvider<JevClient> jev=mock(ObjectProvider.class);
         var profiles=mock(ProfileStore.class);when(profiles.pages()).thenReturn(List.of());when(profiles.render(anyList())).thenReturn("");
-        var capability=new AgentCapability("arbitrary-domain","领域测试","按目标处理任务","test-skill","1",List.of());
+        var capability=new AgentCapability("arbitrary-domain","领域测试","按目标处理任务","test-skill","1",List.of(),List.of(),outputs);
+        registry=new AgentRegistry(List.of(capability));
         var definition=new DomainDefinition(capability,"测试领域",()->List.of(tool("query-meals",true,reads),tool("create-order",false,writes)),availability::get);
         var factory=new DomainAgentFactory(List.of(definition),c->model,states,null,policy,mock(WeiboMcpService.class),jev,.8,
                 new TraceStore((s,e)->{}),mock(TrustStore.class),memory,mock(HabitDetector.class),profiles,new ObjectMapper());
-        runtime=new TaskRuntime(store,new AgentRegistry(List.of(capability)),factory,policy,Clock.systemUTC(),16,verifiers);
+        runtime=new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),16,verifiers,List.of(),extractors);
         runtime.captureUser("root","只按我的明确需求执行，写操作逐次确认");
     }
     private ToolBase tool(String name,boolean read,AtomicInteger counter){

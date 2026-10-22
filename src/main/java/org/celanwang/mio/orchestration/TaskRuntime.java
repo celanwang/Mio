@@ -244,6 +244,14 @@ public final class TaskRuntime {
                 result.needsInput()?TaskStatus.NEEDS_INPUT:TaskStatus.COMPLETED;
         String reply=current.unresolvedEffects()?"工具调用已返回，业务副作用仍需按回执核查。\n"+result.reply():result.reply();
         if(cannotResume)reply="本任务已经发出操作，后续步骤需另建任务，不能恢复或重复提交。\n"+reply;
+        if(status==TaskStatus.COMPLETED) {
+            var capability=registry.require(current.spec().capabilityId());
+            var assessment=TaskResultAssessment.evaluate(capability.outputContract(current.spec()),current,clock.millis());
+            if(!capability.executionVersion().equals(current.capabilityVersion())||assessment.state()!=TaskResultAssessment.State.VERIFIED&&assessment.state()!=TaskResultAssessment.State.EXECUTION_ONLY) {
+                status=TaskStatus.FAILED;
+                reply="输出契约未满足，不能将工作报告认定为有效结果。缺少当前证据："+assessment.missingFacts()+"。\n"+reply;
+            }
+        }
         var next=current.next(status,reply,pending,current.effectStarted(),result.action(),clock.millis());
         store.saveTask(current,next,"task_updated");return next;
     }
