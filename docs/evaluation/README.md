@@ -108,3 +108,9 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 组件集（reviews/memory/habits/judge）的共同 `skill_sha256` 使用整个 `skills/` 目录指纹；单任务/注入使用该任务对应技能包指纹。可通过 `eval.runner.skill_digest('*')` 与 `skill_digest('mcd-ordering')` 等生成。黄金集默认视作开发者种子，需人工复核并将每条 `label_status` 标为 `human-reviewed` 后才进入正式门禁。规则登记完成全量审阅后，才能将 rules 的 `scope` 更新为 `complete`、`human_reviewed` 置 true，并为语义规则提供 `semantic-reviewed` 证据；不要用改标记代替实际标注与覆盖扩展。
 
 跨环境联调还复现了生产会话锁的时序问题：Mono 响应先于 doFinally 可见，立即提交确认可能遇到上一请求尚未释放的锁。现使用请求令牌，在成功/失败值向下游发出前释放，取消仍执行最终清理；旧请求只能清理自己持有的令牌。确定性测试验证立即连续请求、旧 finalizer 不释放下一请求、取消与异常恢复。Jev 非有限数或超出 [0,1] 的分数一律转人工，不能因 Infinity 或 1.01 自动批准。
+
+## 受控预览收尾验收
+
+`./scripts/eval-postgres.sh` 在原设施门禁之后生成 `target/evaluation/acceptance.json` 和 `acceptance.md`。同次运行编号和源码指纹用于排除旧报告；持久化、队列及目标生命周期 PG 套件必须执行且零跳过。未提供测试库时 `./scripts/eval.sh` 仍可验证本地设施，收尾状态为 POSTGRES_REQUIRED。开始新运行会先清除旧成功结论，未完成不能沿用旧结果。
+
+OFFLINE_COMPLETE 只说明受控前台工程边界通过本次离线验收。固定剧本仍不能晋升，真实模型、供应商回执覆盖、跨主机与后台自治的资格证据不由该状态推导。操作与扩展边界见 [Multi-Agent 收尾文档](../multi-agent/closure.md)。
