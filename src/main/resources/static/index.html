@@ -151,6 +151,7 @@ textarea{display:block;width:100%;padding:0;background:transparent;border:0;outl
 #goal-overview{max-height:28%;overflow:auto;padding:8px 24px;border-bottom:1px solid var(--border);background:var(--soft);font-size:13px;line-height:1.8;flex-shrink:0}
 .chat-panel:has(#goal-overview:not([hidden])) .conversation{min-height:160px;flex-shrink:0}
 #goal-overview[hidden]{display:none}.goal-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.goal-actions{display:flex;gap:8px}.goal-note{color:var(--secondary)}
+.acceptance{border-top:1px solid var(--border);margin-top:8px;padding-top:8px}.acceptance p{margin:4px 0}.acceptance details{margin:6px 0}.acceptance button{margin:4px 8px 4px 0}.acceptance fieldset{border:1px solid var(--border);border-radius:8px;margin:8px 0;padding:8px}.acceptance-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}.acceptance-field input{max-width:180px}.acceptance input,.acceptance select{color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:4px}.acceptance input[type=checkbox]{margin-right:8px}
   </style>
 </head>
 <body>
@@ -209,7 +210,8 @@ textarea{display:block;width:100%;padding:0;background:transparent;border:0;outl
     <footer class="page-footer"><span>Mio · 从对话到行动</span><span><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>工具操作由你确认</span></footer>
   </main>
   <div id="toast" class="toast" role="status" hidden></div>
-  <script>
+<script src="goal-acceptance.js"></script>
+<script>
 'use strict';
 
 // 任务回答、恢复和批准均通过 POST /chat；任务状态从本机 API 回读。
@@ -240,6 +242,7 @@ try { apiBase = validateBase(readStore('localStorage','mio-api-base') || default
 $('api-base').value = apiBase;
 let busy = false, goalControlBusy = false, chatAbortController = null;
 let chat;
+const acceptanceUI = new MioGoalAcceptance({confirm:saveGoalAcceptance,refresh:()=>refreshTasks(true),changed:()=>renderGoal(),error:showError});
 let toastTimer;
 let theme = readStore('localStorage','mio-theme') === 'light' ? 'light' : 'dark';
 function applyTheme() {
@@ -279,7 +282,7 @@ function validTasks(tasks) {
 }
 function validGoal(goal) {
   if (goal == null) return null;
-  if (!['ACTIVE','PAUSED','CLOSED'].includes(goal.state) || !Number.isSafeInteger(goal.controlRevision) || goal.controlRevision < 0) throw new Error('目标控制状态异常，请重新读取。');
+  if (typeof goal.id!=='string' || !Number.isSafeInteger(goal.revision) || goal.revision<1 || !['ACTIVE','PAUSED','CLOSED'].includes(goal.state) || !Number.isSafeInteger(goal.controlRevision) || goal.controlRevision < 0) throw new Error('目标控制状态异常，请重新读取。');
   return goal;
 }
 function validBudget(budget) {
@@ -304,29 +307,40 @@ function renderGoal() {
   }else details.append(el('summary','goal-note','目标边界与预算说明'));
   details.append(el('div','goal-note',goal.state==='CLOSED'?'已停止新执行，历史、预算与未核查操作保留。开启新对话可规划新目标。':goal.state==='PAUSED'?'待运行任务保留；恢复后需显式继续。旧批准与中断任务不会自动恢复。':'受控前台预览 · 生产资格尚未评定'));
   container.append(details);
+  acceptanceUI.render(container,goal);
 }
-function applyOperational(data){
+function applyOperational(data,requestedAt=performance.now()){
   const goal=validGoal(data.goal), budget=validBudget(data.budget);
-  if(goal && chat.goal && goal.id===chat.goal.id && goal.controlRevision<chat.goal.controlRevision)return false;
+  if(goal && chat.goal && goal.id===chat.goal.id && (goal.controlRevision<chat.goal.controlRevision || goal.revision<chat.goal.revision))return false;
+  if(!acceptanceUI.receive(data.acceptance,goal,requestedAt))return false;
   chat.goal=goal;
   if(!budget || !chat.budget || budget.goalId!==chat.budget.goalId || !Number.isSafeInteger(budget.revision) || !Number.isSafeInteger(chat.budget.revision) || budget.revision>=chat.budget.revision)chat.budget=budget;
   return true;
 }
+async function saveGoalAcceptance(criteria) {
+  if(!chat.goal || chat.goal.state==='CLOSED')throw new Error('已关闭目标的验收条件不可修改。');
+  const current=chat,base=apiBase,requestedAt=performance.now();
+  const response=await fetch(base+'/api/tasks/goal/acceptance',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId,...criteria})});
+  const data=await response.json();if(chat!==current || apiBase!==base)return;
+  if(!response.ok)throw new Error(data.message||'未能确认验收条件，请重新读取后核对。');
+  if(!applyOperational(data,requestedAt)){await refreshTasks(true);return;}
+  chat.tasks=validTasks(data.tasks||[]);chat.pendingConfirmations=validCalls(data.pendingConfirmations||[]);chat.weiboAction=validWeiboAction(data.weiboAction);$('error').hidden=true;save();render();
+}
 async function changeGoal(state) {
-  if(goalControlBusy || !chat.goal)return;const current=chat, base=apiBase;goalControlBusy=true;renderGoal();
+  if(goalControlBusy || !chat.goal)return;const current=chat, base=apiBase,requestedAt=performance.now();goalControlBusy=true;acceptanceUI.invalidate();renderGoal();
   try {
     const response=await fetch(base+'/api/tasks/goal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId,expectedControlRevision:chat.goal.controlRevision,state})});
     const data=await response.json();if(!response.ok)throw new Error(data.message || '目标状态未更新，请核对。');if(chat!==current || apiBase!==base)return;
     $('error').hidden=true;
-    if(!applyOperational(data)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);chat.pendingConfirmations=validCalls(data.pendingConfirmations||[]);chat.weiboAction=validWeiboAction(data.weiboAction);save();render();
+    if(!applyOperational(data,requestedAt)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);chat.pendingConfirmations=validCalls(data.pendingConfirmations||[]);chat.weiboAction=validWeiboAction(data.weiboAction);save();render();
     if(goalStopped())chatAbortController?.abort();
   }catch(error){showError(error.message);try{await refreshTasks(true);if(goalStopped())chatAbortController?.abort();}catch(_){} }
   finally{goalControlBusy=false;renderGoal();}
 }
 async function reconcileTask(taskId,operationId){
-  if(busy)return;setBusy(true);
+  if(busy)return;const requestedAt=performance.now();acceptanceUI.invalidate();setBusy(true);
   try{const response=await fetch(apiBase+'/api/tasks/'+encodeURIComponent(taskId)+'/operations/'+encodeURIComponent(operationId)+'/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId})});
-    const data=await response.json();if(!response.ok)throw new Error(data.message||'核查未完成，请保留未知状态。');if(!applyOperational(data)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);save();render();
+    const data=await response.json();if(!response.ok)throw new Error(data.message||'核查未完成，请保留未知状态。');if(!applyOperational(data,requestedAt)){await refreshTasks(true);return;}chat.tasks=validTasks(data.tasks||[]);save();render();
   }catch(error){showError(error.message);try{await refreshTasks(true);}catch(_){} }finally{setBusy(false);}
 }
 function renderTasks() {
@@ -359,23 +373,23 @@ function renderTasks() {
 }
 async function refreshTasks(discover = false) {
   if (!chat.multiAgent && !discover) return;
-  const currentChat = chat, base = apiBase, session = chat.sessionId || chat.id;
+  const currentChat = chat, base = apiBase, session = chat.sessionId || chat.id, requestedAt=performance.now();
   const response = await fetch(base + '/api/tasks?sessionId=' + encodeURIComponent(session), {cache:'no-store'});
   if (!response.ok) return;
   const data = await response.json(); if (chat !== currentChat || apiBase !== base || data.multiAgent !== true) return;
-  chat.multiAgent = true; chat.sessionId = data.sessionId; if(!applyOperational(data))return; chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
+  chat.multiAgent = true; chat.sessionId = data.sessionId; if(!applyOperational(data,requestedAt))return; chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
 }
 async function cancelTask(taskId) {
-  if (busy || !chat.sessionId) return; setBusy(true);
+  if (busy || !chat.sessionId) return; const requestedAt=performance.now();acceptanceUI.invalidate();setBusy(true);
   try {
     const response = await fetch(apiBase + '/api/tasks/' + encodeURIComponent(taskId) + '/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:chat.sessionId})});
     const data = await response.json(); if (!response.ok) throw new Error(data.message || '暂时无法停止任务。');
-    if(!applyOperational(data)){await refreshTasks(true);return;} chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
+    if(!applyOperational(data,requestedAt)){await refreshTasks(true);return;} chat.tasks = validTasks(data.tasks || []); chat.pendingConfirmations = validCalls(data.pendingConfirmations || []); chat.weiboAction = validWeiboAction(data.weiboAction); save(); render();
   } catch (error) { showError(error.message); }
   finally {setBusy(false);render();}
 }
 function loadChat() {
-  chat = createChat();
+  chat = createChat();acceptanceUI.reset();
   try {
     const stored = JSON.parse(readStore('sessionStorage',storageKey()) || 'null');
     if (stored && typeof stored.id === 'string' && stored.id && Array.isArray(stored.messages) && stored.messages.every(m => m && ['user','assistant'].includes(m.role) && typeof m.content === 'string')) {
@@ -387,7 +401,7 @@ function loadChat() {
 }
 function newChat() {
   if (busy) return;
-  chat = createChat(); $('error').hidden = true; $('message').value = ''; resizeInput(); save(); render(); $('message').focus();
+  chat = createChat();acceptanceUI.reset(); $('error').hidden = true; $('message').value = ''; resizeInput(); save(); render(); $('message').focus();
 }
 $('new-chat').onclick = newChat;
 $('api-form').onsubmit = event => {
@@ -646,7 +660,7 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
   if (!isConfirmation && !isResume && (!text || (chat.pendingConfirmations.length && !chat.multiAgent))) return;
   chat.weiboAuthorizationPending = false;
   $('error').hidden = true; const userMessage = { role:'user',content:replyTarget ? '回答 ' + replyTarget.agent + '：' + text : text }; if (!isConfirmation && !isResume) chat.messages.push(userMessage);
-  $('message').value = ''; resizeInput(); render(); setBusy(true);
+  $('message').value = ''; acceptanceUI.invalidate();resizeInput(); render(); setBusy(true);
   const pending = addMessage({ role:'assistant',content:isConfirmation ? '正在根据你的决定继续处理…' : '正在思考并处理你的请求…' },true); scrollToLatest();
   const start = performance.now(), controller = new AbortController(), timeout = setTimeout(() => controller.abort(),185000);
   chatAbortController=controller;
@@ -666,7 +680,7 @@ async function sendMessage(text,confirmations = [],resumeTaskId = null) {
     }
     if (isResume) chat.messages.push({role:'user',content:queuedResume ? '领取并执行准备任务' : '继续已接收回答的任务'});
     if (replyTarget) chat.replyTarget = null;
-    chat.multiAgent = data.multiAgent === true; if(!applyOperational(data))throw new Error('目标状态已更新，已忽略旧响应。'); chat.tasks = validTasks(data.tasks || []);
+    chat.multiAgent = data.multiAgent === true; if(!applyOperational(data,start))throw new Error('目标状态已更新，已忽略旧响应。'); chat.tasks = validTasks(data.tasks || []);
     chat.pendingConfirmations = calls;
     chat.weiboAction = weiboAction;
     chat.messages.push({ role:'assistant',content:data.reply || (calls.length ? '需要你确认以下操作后，才能继续。' : '本次处理已结束。'),elapsed:((performance.now()-start)/1000).toFixed(1) });
