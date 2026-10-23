@@ -12,8 +12,10 @@ public record TaskSummary(String id,String key,String agent,String objective,Tas
         String reply=task.status()==TaskStatus.UNKNOWN&&!task.unresolvedEffects()
                 ?"执行已中断，业务结果已通过回执核实；请查看操作记录，不重跑本任务。":task.reply();
         if(task.invalidation()!=null)reply="当前结果已失效："+task.invalidation().message()+"。历史操作记录保留，不重跑已提交动作。\n"+reply;
+        if(reply.length()>2000)reply=reply.substring(0,2000)+"\n[工作报告节选，完整报告按任务编号读取]";
+        var operations=task.operations().stream().map(op->new OperationRecord(op.id(),op.callId(),op.tool(),op.inputHash(),op.startedAt(),op.phase(),"",op.outcome(),op.businessId(),op.receipts().stream().skip(Math.max(0,op.receipts().size()-3)).map(r->new OperationReceipt(r.id(),r.source(),r.frameworkState(),"",r.outcome(),r.businessId(),r.observedAt())).toList(),op.logicalId(),op.scopeKey())).toList();
         return new TaskSummary(task.id(),task.spec().key(),name,task.spec().objective(),
                 task.status(),reply,task.goalRevision(),task.unresolvedEffects(),
-                (int)task.approvals().stream().filter(a->a.decision()==null).count(),task.operations(),TaskFacts.validAt(task,System.currentTimeMillis()),task.questionId(),task.invalidation(),task.spec().dependencies(),task.spec().inputs(),task.spec().inputContract(),task.spec().dispatch(),queue,java.util.List.of(),TaskResultAssessment.current(task,registry,System.currentTimeMillis()));
+                (int)task.approvals().stream().filter(a->a.decision()==null).count(),operations,TaskFacts.validAt(task,System.currentTimeMillis()),task.questionId(),task.invalidation(),task.spec().dependencies(),task.spec().inputs(),task.spec().inputContract(),task.spec().dispatch(),queue,java.util.List.of(),TaskResultAssessment.current(task,registry,System.currentTimeMillis()));
     }
 }

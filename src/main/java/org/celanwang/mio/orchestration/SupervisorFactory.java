@@ -25,7 +25,7 @@ public final class SupervisorFactory {
     public ReActAgent create(String session,RunBudget budget){return create(session,budget,"");}
     public ReActAgent create(String session,RunBudget budget,String context){
         var toolkit=new Toolkit();
-        for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task"))
+        for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","read_task","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task"))
             toolkit.registerAgentTool(new OrchestrationTool(name,session,runtime,registry,budget,json));
         if(acceptance!=null)toolkit.registerAgentTool(new OrchestrationTool("read_goal_acceptance",session,runtime,registry,budget,json,acceptance));
         if(programs!=null)toolkit.registerAgentTool(new org.celanwang.mio.goals.GoalProgramTool(programs,session,budget,json));

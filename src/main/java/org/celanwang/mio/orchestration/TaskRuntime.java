@@ -68,6 +68,11 @@ public final class TaskRuntime {
     public PlanReview reviewPlan(String session){return PlanReview.of(goal(session),list(session),clock.millis(),store);}
     public GoalRecord goal(String session){return store.goal(session).orElseThrow(()->new IllegalArgumentException("目标不存在"));}
     public Optional<GoalRecord> findGoal(String session){return store.goal(session);}
+    public List<TaskRecord> visibleTasks(String session){
+        var all=list(session);var goal=goal(session);var visible=new LinkedHashMap<String,TaskRecord>();
+        all.stream().filter(t->!t.status().terminal()||t.unresolvedEffects()).forEach(t->visible.put(t.id(),t));
+        all.stream().filter(t->t.goalRevision()==goal.revision()).sorted(Comparator.comparingLong(TaskRecord::updatedAt).reversed()).limit(8).forEach(t->visible.put(t.id(),t));return List.copyOf(visible.values());
+    }
     public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).map(t->{
         if(queue!=null&&t.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(t.id());return t;
     }).toList();}

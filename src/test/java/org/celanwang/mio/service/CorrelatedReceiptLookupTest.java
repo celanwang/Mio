@@ -17,13 +17,13 @@ class CorrelatedReceiptLookupTest {
         var props=new TencentRideProperties();props.setEnabled(true);props.setToken("synthetic-token");props.setDataDirectory(directory);
         var calls=new AtomicInteger();var json=new ObjectMapper();
         var service=new TencentRideService(props,json,"skills"){
-            @Override public synchronized String execute(String session,Map<String,Object> input){assertThat(input.get("command")).isEqualTo("query-ongoing-order");calls.incrementAndGet();return "unrelated current order";}
+            @Override public synchronized String execute(String session,Map<String,Object> input){assertThat(input.get("command")).isEqualTo("query-order");assertThat(input.get("parameters")).isEqualTo(Map.of("order_id","order-1"));calls.incrementAndGet();return "unrelated current order";}
         };
         String logical=UUID.randomUUID().toString(),scope=service.operationScope();
         assertThat(json.readTree(service.reconcile("child",logical,scope)).path("status").asText()).isEqualTo("UNKNOWN");assertThat(calls.get()).isZero();
         String account=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest("synthetic-token".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         Path receipts=directory.resolve("accounts").resolve(account).resolve("operations");Files.createDirectories(receipts);
-        Files.writeString(receipts.resolve(logical+".json"),json.writeValueAsString(Map.of("logicalId",logical,"scopeKey",scope,"receipt",Map.of("original",true))));
+        Files.writeString(receipts.resolve(logical+".json"),json.writeValueAsString(Map.of("logicalId",logical,"scopeKey",scope,"receipt",Map.of("original",true,"exitCode",0,"output",Map.of("result",Map.of("status",200,"body",Map.of("code",0,"data",Map.of("orderId","order-1"))))))));
         var result=json.readTree(service.reconcile("child",logical,scope));assertThat(result.path("logicalId").asText()).isEqualTo(logical);assertThat(result.path("createReceipt").path("original").asBoolean()).isTrue();assertThat(calls.get()).isEqualTo(1);
         props.setToken("different-token");assertThatThrownBy(()->service.reconcile("child",logical,scope)).isInstanceOf(IllegalStateException.class);assertThat(calls.get()).isEqualTo(1);
     }
