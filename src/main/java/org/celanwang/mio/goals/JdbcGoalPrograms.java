@@ -49,7 +49,7 @@ public final class JdbcGoalPrograms {
     }
     public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();build(goal,find(goal.id()).orElse(null),request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
     public GoalProgram refresh(String session,long expected,Set<String> roots){return tx.execute(status->{
-        var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");var previous=find(goal.id()).orElseThrow();if(previous.revision()!=expected)throw new IllegalStateException("计划已更新，请刷新");
+        var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");var previous=find(goal.id()).orElseThrow();if(previous.revision()!=expected||previous.goalRevision()!=goal.revision())throw new IllegalStateException("计划或用户目标已更新，请重新确认计划");
         var affected=new HashSet<>(roots);if(affected.isEmpty()||!previous.steps().stream().map(GoalProgram.Step::id).collect(java.util.stream.Collectors.toSet()).containsAll(affected))throw new IllegalArgumentException("请选择现有步骤");
         boolean expanded;do{expanded=false;for(var step:previous.steps())if(!affected.contains(step.id())&&!Collections.disjoint(step.dependencies(),affected))expanded|=affected.add(step.id());}while(expanded);
         var keys=previous.steps().stream().filter(s->affected.contains(s.id())).map(previous::taskKey).collect(java.util.stream.Collectors.toSet());

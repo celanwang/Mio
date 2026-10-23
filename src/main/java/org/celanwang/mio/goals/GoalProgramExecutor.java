@@ -42,19 +42,19 @@ public final class GoalProgramExecutor {
     private boolean ready(GoalProgram.Step step,TaskRecord task){
         if(task.status()!=TaskStatus.COMPLETED||task.invalidation()!=null)return false;var assessment=TaskResultAssessment.current(task,registry,System.currentTimeMillis());if(assessment.state()!=TaskResultAssessment.State.VERIFIED&&assessment.state()!=TaskResultAssessment.State.EXECUTION_ONLY)return false;
         var contract=registry.require(task.spec().capabilityId()).outputContract(task.spec());
-        for(var check:step.checks()){var field=contract.fields().stream().filter(f->f.id().equals(check.fieldId())).findFirst().orElseThrow();var actual=TaskFacts.validAt(task,System.currentTimeMillis()).stream().filter(f->f.key().equals(field.factKey())).findFirst().map(f->f.value().get(field.valueKey())).orElse(null);if(!check.matches(field,actual))return false;}return true;
+        for(var check:step.checks()){var field=contract.fields().stream().filter(f->f.id().equals(check.fieldId())).findFirst().orElse(null);if(field==null)return false;var actual=TaskFacts.validAt(task,System.currentTimeMillis()).stream().filter(f->f.key().equals(field.factKey())).findFirst().map(f->f.value().get(field.valueKey())).orElse(null);try{if(!check.matches(field,actual))return false;}catch(IllegalArgumentException invalid){return false;}}return true;
     }
     public Map<String,Object> status(String session){
         var view=programs.view(session);var p=(GoalProgram)view.get("program");if(p==null)return Map.of("steps",List.of());var tasks=runtime.list(session);var steps=new ArrayList<Map<String,Object>>();
         for(var step:p.steps()){
             var task=tasks.stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
-            var state=task==null?"WAITING":task.status().name();if(task!=null&&task.status()==TaskStatus.COMPLETED)state=ready(step,task)?task.spec().outputContract().equals("report")?"REPORT_READY":"VERIFIED":"EVIDENCE_OR_CONDITION_MISSING";var result=new LinkedHashMap<String,Object>();result.put("id",step.id());result.put("state",state);result.put("reply",task==null?"":task.reply());result.put("taskId",task==null?"":task.id());
+            var state=task==null?"WAITING":task.status().name();if(task!=null&&task.status()==TaskStatus.COMPLETED)state=ready(step,task)?task.spec().outputContract().equals("report")?"REPORT_READY":"VERIFIED":"EVIDENCE_OR_CONDITION_MISSING";if(p.goalRevision()!=runtime.goal(session).revision())state="GOAL_CHANGED";var result=new LinkedHashMap<String,Object>();result.put("id",step.id());result.put("state",state);result.put("reply",task==null?"":task.reply());result.put("taskId",task==null?"":task.id());
             if(task!=null)result.put("assessment",TaskResultAssessment.current(task,registry,System.currentTimeMillis()));steps.add(result);
         }
         var rows=(List<?>)view.get("runtime");return Map.of("steps",steps,"runtime",rows.isEmpty()?Map.of():rows.get(0),"wakeups",wakeups.recent(p.goalId()),"programRevision",p.revision());
     }
     public List<Map<String,Object>> compare(String session,String fieldId,boolean descending){
-        var goal=runtime.goal(session);var p=programs.find(goal.id()).orElseThrow();var tasks=runtime.list(session);var result=new ArrayList<Map<String,Object>>();
+        var goal=runtime.goal(session);var p=programs.find(goal.id()).orElseThrow();if(p.goalRevision()!=goal.revision())throw new IllegalStateException("用户目标已改变，请重新确认计划");var tasks=runtime.list(session);var result=new ArrayList<Map<String,Object>>();
         for(var step:p.steps()){
             var task=tasks.stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);if(task==null||!ready(step,task))continue;
             var contract=registry.require(step.capabilityId()).outputContract(task.spec());var field=contract.fields().stream().filter(f->f.id().equals(fieldId)&&f.type()==CapabilityOutputContract.ValueType.NUMBER).findFirst().orElse(null);if(field==null)continue;
