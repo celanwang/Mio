@@ -10,12 +10,15 @@
     </parent>
     <groupId>org.celanwang</groupId>
     <artifactId>mio</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>6.0.0</version>
     <name>Mio</name>
     <description>Mio</description>
     <properties>
         <java.version>17</java.version>
         <eval.excluded-groups>model-evaluation</eval.excluded-groups>
+        <mio.source-fingerprint>unverified</mio.source-fingerprint>
+        <mio.source-revision>unknown</mio.source-revision>
+        <mio.eval.run-id>unverified</mio.eval.run-id>
     </properties>
     <dependencies>
         <dependency>
@@ -76,6 +79,19 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals><goal>build-info</goal></goals>
+                        <configuration>
+                            <additionalProperties>
+                                <sourceFingerprint>${mio.source-fingerprint}</sourceFingerprint>
+                                <sourceRevision>${mio.source-revision}</sourceRevision>
+                                <evalRunId>${mio.eval.run-id}</evalRunId>
+                                <javaVersion>${java.version}</javaVersion>
+                            </additionalProperties>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

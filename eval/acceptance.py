@@ -7,10 +7,11 @@ import sys
 import unittest
 import uuid
 import xml.etree.ElementTree as ET
+from eval.release import revision, matches
 
 PG_SUITES = ('JdbcPostgresIntegrationTest', 'JdbcTaskQueueIntegrationTest', 'JdbcGoalLifecycleIntegrationTest',
              'JdbcMemoryConsistencyIntegrationTest', 'JdbcOrchestrationAcceptanceTest', 'JdbcGoalAcceptanceIntegrationTest',
-             'JdbcMemoryJobsIntegrationTest', 'JdbcMemoryUsageIntegrationTest')
+             'JdbcMemoryJobsIntegrationTest', 'JdbcMemoryUsageIntegrationTest', 'JdbcMaintenanceIntegrationTest')
 
 
 def fingerprint(root):
@@ -34,7 +35,7 @@ def read(path):
 
 def begin(root, directory):
     run_id = str(uuid.uuid4())
-    write(directory / 'acceptance-run.json', {'run_id': run_id, 'source_fingerprint': fingerprint(root)})
+    write(directory / 'acceptance-run.json', {'run_id': run_id, 'source_fingerprint': fingerprint(root), 'source_revision': revision(root)})
     write(directory / 'acceptance.json', {'run_id': run_id, 'status': 'RUNNING', 'qualification': 'NOT_ESTABLISHED'})
     (directory / 'acceptance.md').write_text('# 离线验收尚未完成\n\n本次运行未形成完整结论，不沿用之前的成功报告。\n')
     print(run_id)
@@ -70,11 +71,14 @@ def assess(root, directory):
         'python_passed': python['tests'] > 0 and python['failures'] == python['errors'] == python['skipped'] == 0,
         'postgres_executed': pg_complete and java['skipped'] == 0,
         'fixture_not_qualified': fixture['status'] == 'insufficient_or_failed_evidence',
+        'packaged_artifact_matches': matches(root, directory, run),
     }
     failed = [name for name, passed in checks.items() if not passed]
     status = 'OFFLINE_COMPLETE' if not failed else 'POSTGRES_REQUIRED' if failed == ['postgres_executed'] else 'INCOMPLETE'
     return {'schema_version': 1, 'run_id': run['run_id'], 'source_fingerprint': run['source_fingerprint'],
             'status': status, 'qualification': 'NOT_ESTABLISHED', 'java': java, 'python': python,
+            'source_revision': run.get('source_revision'),
+            'release': read(directory / 'release.json') if (directory / 'release.json').exists() else None,
             'checks': checks, 'failed_checks': failed,
             'scope': 'Multi-Agent v6 controlled foreground preview; no real model/provider qualification'}
 
@@ -85,9 +89,13 @@ def report(root, directory, require_postgres):
              '目标：可暂停、可恢复、可关闭，保留预算与未知操作，具备可重复的离线验收。', '',
              'Java：{tests} 项，失败 {failures}，错误 {errors}，跳过 {skipped}。'.format(**result['java']),
              'Python：{tests} 项，失败 {failures}，错误 {errors}，跳过 {skipped}。'.format(**result['python']), '',
-             '生产资格：未建立。本报告不包含真实模型采样、真实供应商操作或后台自动消费。', '',
+             '生产资格：未建立。本报告不包含真实模型采样或真实供应商操作；业务任务仍由前台显式消费，记忆后台单独验收。', '',
              '同一运行编号与源码指纹用于拒绝混入旧报告。源码指纹：`' + result['source_fingerprint'] + '`。', '']
     lines.extend('- ' + name + '：' + ('通过' if passed else '未通过') for name, passed in result['checks'].items())
+    if result['release']:
+        package = result['release']
+        lines.extend(['', '构建版本：`' + str(package.get('version')) + '`。Git revision：`' + str(result['source_revision']) + '`。',
+                      '产物：`' + str(package.get('file')) + '`。SHA-256：`' + str(package.get('sha256')) + '`。'])
     (directory / 'acceptance.md').write_text('\n'.join(lines) + '\n')
     return 0 if result['status'] == 'OFFLINE_COMPLETE' or result['status'] == 'POSTGRES_REQUIRED' and not require_postgres else 1
 

@@ -5,17 +5,24 @@ from pathlib import Path
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import zipfile
 from eval.acceptance import assess, begin, fingerprint, PG_SUITES, write
 
 
 class AcceptanceTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name); (self.root / 'pom.xml').write_text('synthetic build')
+        self.root = Path(self.temp.name); (self.root / 'pom.xml').write_text('<project xmlns="http://maven.apache.org/POM/4.0.0"><version>6.0.0</version></project>')
         self.directory = self.root / 'target/evaluation'
-        write(self.directory / 'acceptance-run.json', {'run_id': 'current', 'source_fingerprint': fingerprint(self.root)})
+        write(self.directory / 'acceptance-run.json', {'run_id': 'current', 'source_fingerprint': fingerprint(self.root), 'source_revision': 'fixture-revision'})
         write(self.directory / 'python-tests.json', {'run_id': 'current', 'tests': 5, 'failures': 0, 'errors': 0, 'skipped': 0})
         write(self.directory / 'promotion.json', {'status': 'insufficient_or_failed_evidence'})
+        jar = self.root / 'target/mio-6.0.0.jar'
+        with zipfile.ZipFile(jar, 'w') as output:
+            output.writestr('META-INF/build-info.properties',
+                            'build.version=6.0.0\nbuild.javaVersion=17\nbuild.sourceRevision=fixture-revision\nbuild.evalRunId=current\nbuild.sourceFingerprint=' + fingerprint(self.root) + '\n')
+        from eval.release import artifact
+        write(self.directory / 'release.json', artifact(self.root))
         reports = self.root / 'target/surefire-reports'; reports.mkdir(parents=True)
         for name in PG_SUITES:
             node = ET.Element('testsuite', name='test.' + name, tests='1', failures='0', errors='0', skipped='0')
@@ -45,3 +52,21 @@ class AcceptanceTest(unittest.TestCase):
         write(self.directory / 'acceptance.json', {'status': 'OFFLINE_COMPLETE'})
         with contextlib.redirect_stdout(io.StringIO()): begin(self.root, self.directory)
         self.assertEqual(json.loads((self.directory / 'acceptance.json').read_text())['status'], 'RUNNING')
+
+    def test_modified_package_or_old_package_provenance_cannot_pass(self):
+        jar = self.root / 'target/mio-6.0.0.jar'
+        with jar.open('ab') as output: output.write(b'changed')
+        self.assertIn('packaged_artifact_matches', assess(self.root, self.directory)['failed_checks'])
+
+    def test_missing_release_evidence_cannot_pass(self):
+        (self.directory / 'release.json').unlink()
+        self.assertIn('packaged_artifact_matches', assess(self.root, self.directory)['failed_checks'])
+
+    def test_old_build_metadata_stays_invalid_even_when_hash_is_recaptured(self):
+        jar = self.root / 'target/mio-6.0.0.jar'
+        with zipfile.ZipFile(jar, 'w') as output:
+            output.writestr('META-INF/build-info.properties',
+                            'build.version=6.0.0\nbuild.javaVersion=17\nbuild.sourceRevision=fixture-revision\nbuild.evalRunId=old\nbuild.sourceFingerprint=' + fingerprint(self.root) + '\n')
+        from eval.release import artifact
+        write(self.directory / 'release.json', artifact(self.root))
+        self.assertIn('packaged_artifact_matches', assess(self.root, self.directory)['failed_checks'])
