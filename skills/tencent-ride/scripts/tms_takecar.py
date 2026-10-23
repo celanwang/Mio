@@ -1869,6 +1869,7 @@ def build_parser() -> argparse.ArgumentParser:
 	cancel_order_parser.set_defaults(handler=handle_cancel_order)
 
 	query_order_parser = subparsers.add_parser("query-order", help="Query ride order status, driver and vehicle info")
+	query_order_parser.add_argument("--order-id", help="Explicit correlated order id; omit to query current ongoing order")
 	query_order_parser.set_defaults(handler=handle_query_order)
 
 	query_driver_location_parser = subparsers.add_parser("query-driver-location", help="Query real-time driver location for an order")
@@ -2346,7 +2347,7 @@ def handle_query_order(args: argparse.Namespace, environ: dict, stdout, stderr) 
 	if not check_token(environ, stderr):
 		return 1
 
-	order_id = get_ongoing_order_id(environ, stdout, stderr)
+	order_id = normalize_order_id(getattr(args, "order_id", None)) or get_ongoing_order_id(environ, stdout, stderr)
 	if not order_id:
 		return 5
 

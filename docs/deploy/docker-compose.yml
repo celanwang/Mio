@@ -3,7 +3,7 @@
 # 使用:在本目录放置 .env,填写 PG_PASSWORD / REDIS_PASSWORD(勿提交),
 # 然后 docker compose up -d。
 #
-# 注意:当前端口绑 0.0.0.0 依赖安全组白名单兜底(见 README.md);
+# 注意:默认仅绑定本机回环；远程部署需显式规划网络访问控制;
 # 若应用与本栈同机部署,建议改为 127.0.0.1 绑定并关闭安全组端口。
 
 services:
@@ -17,7 +17,7 @@ services:
       POSTGRES_DB: mio
       TZ: Asia/Shanghai
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - /data/postgres:/var/lib/postgresql/data
 
@@ -28,7 +28,7 @@ services:
     environment:
       TZ: Asia/Shanghai
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - /data/redis:/data
     command:

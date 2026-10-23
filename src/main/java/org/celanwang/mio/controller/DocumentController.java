@@ -11,6 +11,9 @@ public class DocumentController {
     @GetMapping public List<Map<String,Object>> list(@RequestParam(defaultValue="") String query){return documents.search(query);}
     @GetMapping("/{id}") public JdbcDocuments.Document read(@PathVariable String id){return documents.read(id);}
     @PutMapping("/{id}") public JdbcDocuments.Document save(@PathVariable String id,@RequestBody JdbcDocuments.Save request){return documents.save(id,request,null);}
+    @GetMapping("/{id}/chunks") public List<Map<String,Object>> chunks(@PathVariable String id){return documents.chunks(id);}
+    @PostMapping("/{id}/index") public Map<String,Integer> index(@PathVariable String id,@RequestParam long expectedRevision){return Map.of("indexed",documents.index(id,expectedRevision));}
+    @DeleteMapping("/{id}") public void delete(@PathVariable String id,@RequestParam long expectedRevision){documents.delete(id,expectedRevision);}
     public record Publish(String sessionId,String taskId,String title){}
     @PostMapping("/publish") public JdbcDocuments.Document publish(@RequestBody Publish request){return documents.publish(request.sessionId(),request.taskId(),request.title());}
     @ExceptionHandler({IllegalArgumentException.class,IllegalStateException.class}) public org.springframework.http.ResponseEntity<Map<String,String>> error(RuntimeException e){return org.springframework.http.ResponseEntity.status(e instanceof IllegalArgumentException?400:409).body(Map.of("message",e.getMessage()));}

@@ -10,9 +10,13 @@ import java.util.*;
 @CrossOrigin(origins={"http://localhost:63342","http://127.0.0.1:63342"})
 @ConditionalOnProperty(prefix="app.multi-agent",name="enabled",havingValue="true")
 public class GoalWorkspaceController {
-    private final GoalWorkspace workspace;private final GoalPlanGenerator planner;private final MultiAgentChatService chat;
-    public GoalWorkspaceController(GoalWorkspace workspace,GoalPlanGenerator planner,MultiAgentChatService chat){this.workspace=workspace;this.planner=planner;this.chat=chat;}
+    private final GoalWorkspace workspace;private final GoalPlanGenerator planner;private final MultiAgentChatService chat;private final GoalContinuity continuity;
+    public GoalWorkspaceController(GoalWorkspace workspace,GoalPlanGenerator planner,MultiAgentChatService chat,GoalContinuity continuity){this.workspace=workspace;this.planner=planner;this.chat=chat;this.continuity=continuity;}
     public record Create(String intent){} public record Ack(long version){} public record Answer(String taskId,String questionId,String text){}
+    @PostMapping("/{session}/renew") public GoalProgram renew(@PathVariable String session,@RequestBody GoalContinuity.Renew request){return continuity.renew(session,request);}
+    @PostMapping("/{session}/context") public void context(@PathVariable String session,@RequestBody GoalContinuity.Context request){continuity.checkpoint(session,request);}
+    @GetMapping("/{session}/history") public List<Map<String,Object>> history(@PathVariable String session,@RequestParam(defaultValue="") String before,@RequestParam(defaultValue="50") int limit){return continuity.history(session,before,limit);}
+    @GetMapping("/{session}/contexts") public List<Map<String,Object>> contexts(@PathVariable String session){return continuity.archives(session);}
     @GetMapping public List<Map<String,Object>> list(){return workspace.list();}
     @PostMapping public Map<String,String> create(@RequestBody Create request){return Map.of("sessionId",workspace.create(request.intent()));}
     @GetMapping("/{session}") public Map<String,Object> snapshot(@PathVariable String session){return workspace.snapshot(session);}

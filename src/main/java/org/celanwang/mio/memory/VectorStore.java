@@ -9,6 +9,8 @@ import java.util.List;
  */
 public interface VectorStore {
 
+    default String namespace(){return "legacy";}
+
     /** 写入/覆盖一条向量并持久化。 */
     void upsert(String id, float[] vector);
 

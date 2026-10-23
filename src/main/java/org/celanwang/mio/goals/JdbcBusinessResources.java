@@ -13,11 +13,14 @@ public final class JdbcBusinessResources {
     public enum State { CREATED,ACCEPTED,IN_PROGRESS,COMPLETED,CANCELLED,UNKNOWN }
     public record Report(State state,String evidence,String expectedObservation){}
     private final JdbcTemplate jdbc;private final CoordinationStore store;private final TransactionTemplate tx;private final ObjectMapper json;
+    private Map<String,String> statusMapping=Map.of();
+    public JdbcBusinessResources withStatusMapping(Map<String,String> values){values.values().forEach(v->State.valueOf(v));statusMapping=Map.copyOf(values);return this;}
     public JdbcBusinessResources(JdbcTemplate jdbc,DataSource source,CoordinationStore store,ObjectMapper json){this.jdbc=jdbc;this.store=store;this.json=json;tx=new TransactionTemplate(new DataSourceTransactionManager(source));}
     public void initialize(){
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_resources(operation_id TEXT PRIMARY KEY,goal_id TEXT NOT NULL REFERENCES goals(id),task_id TEXT NOT NULL REFERENCES tasks(id),provider TEXT NOT NULL,business_id TEXT NOT NULL,created_at BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS resource_observations(id TEXT PRIMARY KEY,operation_id TEXT NOT NULL REFERENCES goal_resources(operation_id),state TEXT NOT NULL,source TEXT NOT NULL,evidence TEXT NOT NULL,observed_at BIGINT NOT NULL)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_resources_goal ON goal_resources(goal_id)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS resource_watches(operation_id TEXT PRIMARY KEY REFERENCES goal_resources(operation_id),enabled BOOLEAN NOT NULL DEFAULT true)");
     }
     public void changed(TaskRecord task){
         for(var op:task.operations()){
@@ -38,14 +41,15 @@ public final class JdbcBusinessResources {
             var data=current.path("body").path("data");if(data.path("detail").isObject())data=data.path("detail");
             if(!data.path("orderId").isTextual()||!data.path("orderId").asText().equals(op.businessId()))return;
             String detail="供应商状态="+data.path("status").asText()+"；"+data.path("statusDesc").asText();
-            // Numeric supplier state meanings are not guessed. Preserve its observation for operator review.
-            observe(op.id(),receipt.id()+":observed",State.UNKNOWN,"PROVIDER_STATUS",detail.substring(0,Math.min(1000,detail.length())),receipt.observedAt());
+            var mapped=State.valueOf(statusMapping.getOrDefault(data.path("status").asText(),"UNKNOWN"));
+            if(data.has("cost"))detail+="；供应商费用字段="+data.path("cost").toString();
+            observe(op.id(),receipt.id()+":observed",mapped,"PROVIDER_STATUS",detail.substring(0,Math.min(1000,detail.length())),receipt.observedAt());
         }catch(org.springframework.dao.DataAccessException storage){throw storage;}catch(Exception malformed){/* Creation evidence remains usable; malformed status cannot become fulfillment. */}
     }
     private void observe(String operation,String id,State state,String source,String evidence,long at){jdbc.update("INSERT INTO resource_observations VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING",id,operation,state.name(),source,evidence,at);}
     public List<Map<String,Object>> list(String session){
         var goal=store.goal(session).orElseThrow();
-        return jdbc.queryForList("SELECT r.*,o.id AS observation_id,o.state,o.source,o.evidence,o.observed_at FROM goal_resources r LEFT JOIN LATERAL (SELECT * FROM resource_observations WHERE operation_id=r.operation_id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true WHERE r.goal_id=? ORDER BY r.created_at DESC",goal.id());
+        return jdbc.queryForList("SELECT r.*,coalesce((SELECT enabled FROM resource_watches w WHERE w.operation_id=r.operation_id),true) AS watch_enabled,o.id AS observation_id,o.state,o.source,o.evidence,o.observed_at FROM goal_resources r LEFT JOIN LATERAL (SELECT * FROM resource_observations WHERE operation_id=r.operation_id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true WHERE r.goal_id=? ORDER BY r.created_at DESC",goal.id());
     }
     public void report(String session,String operation,Report report){
         if(report==null||report.state()==null||report.evidence()==null||report.evidence().isBlank()||report.evidence().length()>2000)throw new IllegalArgumentException("请填写核实依据");
@@ -56,4 +60,6 @@ public final class JdbcBusinessResources {
         });
     }
     public List<Map<String,Object>> history(String session,String operation){var goal=store.goal(session).orElseThrow();return jdbc.queryForList("SELECT o.* FROM resource_observations o JOIN goal_resources r ON r.operation_id=o.operation_id WHERE r.goal_id=? AND r.operation_id=? ORDER BY o.observed_at,o.id",goal.id(),operation);}
+    public void watch(String session,String operation,boolean enabled){var goal=store.goal(session).orElseThrow();if(!Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM goal_resources WHERE operation_id=? AND goal_id=?)",Boolean.class,operation,goal.id())))throw new IllegalArgumentException("资源不属于当前目标");jdbc.update("INSERT INTO resource_watches VALUES (?,?) ON CONFLICT(operation_id) DO UPDATE SET enabled=EXCLUDED.enabled",operation,enabled);}
+    public boolean shouldTrack(String operation){return !Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM resource_watches WHERE operation_id=? AND enabled=false) OR EXISTS(SELECT 1 FROM (SELECT state,source FROM resource_observations WHERE operation_id=? ORDER BY observed_at DESC,id DESC LIMIT 1) latest WHERE source='PROVIDER_STATUS' AND state IN ('COMPLETED','CANCELLED'))",Boolean.class,operation,operation));}
 }

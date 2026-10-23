@@ -127,7 +127,7 @@ COMMANDS = {
     "poi-search": ("keyword", "city_name", "page_size", "page_index", "scene"),
     "select-poi": ("poiid", "scene", "candidate_id"), "estimate-price": (),
     "create-order": ("price_estimate_keys", "user_prefer_labels"),
-    "query-ongoing-order": (), "query-order": (), "query-driver-location": (),
+    "query-ongoing-order": (), "query-order": ("order_id",), "query-driver-location": (),
     "check-cancel-fee": ("reason",), "cancel-order": ("orderId", "amountFen", "reason"),
     "build-static-map-url": ("markers_json",),
 }

@@ -66,6 +66,8 @@ class MultiAgentConfigTest {
         @Bean TrustStore trust(){return mock(TrustStore.class);}
         @Bean MioLongTermMemory memory(){return mock(MioLongTermMemory.class);}
         @Bean HabitDetector habits(){return mock(HabitDetector.class);}
+        @Bean EmbeddingClient embedding(){return mock(EmbeddingClient.class);}
+        @Bean org.celanwang.mio.memory.jobs.JdbcMemoryUsage usage(){return mock(org.celanwang.mio.memory.jobs.JdbcMemoryUsage.class);}
         @Bean ProfileStore profiles(){return mock(ProfileStore.class);}
     }
 }

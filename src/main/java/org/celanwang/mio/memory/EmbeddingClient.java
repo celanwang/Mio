@@ -128,4 +128,5 @@ public class EmbeddingClient {
     }
     public boolean available(){return StringUtils.hasText(apiKey);}
     public String modelName(){return model;}
+    public String namespace(){return org.celanwang.mio.orchestration.JsonFingerprint.hash(java.util.Map.of("endpoint",endpoint,"model",model,"dimensions",1024,"preprocessing","prefix-2000-v1"));}
 }

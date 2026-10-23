@@ -109,7 +109,7 @@ public final class TaskRuntime {
             }
             if(spec.dispatch()==TaskSpec.Dispatch.QUEUED&&queue==null)throw new IllegalStateException("准备任务队列未启用");
             registry.status(spec.capabilityId()).requireExecution();
-            if(existing.size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");
+            if(store.activeTaskCount(session)>=maxTasks)throw new RunBudget.BudgetExceeded("活动任务数量已达上限");
             for(String dependency:spec.dependencies()){
                 var parent=budget.fenced(()->require(session,dependency));
                 if(!parent.goalId().equals(goal.id())||parent.goalRevision()!=goal.revision())throw new IllegalArgumentException("依赖不属于当前目标版本");
@@ -119,7 +119,7 @@ public final class TaskRuntime {
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
                     capability.executionVersion(),spec.dispatch()==TaskSpec.Dispatch.QUEUED?TaskStatus.QUEUED:TaskStatus.WAITING_DEPENDENCY,
                     spec.dispatch()==TaskSpec.Dispatch.QUEUED?"已进入准备队列，前置任务就绪后可领取执行":"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());
-            budget.fenced(()->{if(store.tasks(session).size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");if(spec.dispatch()==TaskSpec.Dispatch.QUEUED)queue.enqueue(task);else store.createTask(task);return null;});
+            budget.fenced(()->{if(store.activeTaskCount(session)>=maxTasks)throw new RunBudget.BudgetExceeded("活动任务数量已达上限");if(spec.dispatch()==TaskSpec.Dispatch.QUEUED)queue.enqueue(task);else store.createTask(task);return null;});
             return spec.dispatch()==TaskSpec.Dispatch.QUEUED?Mono.just(task):runWhenReady(task,goal,budget);
         });
     }

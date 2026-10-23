@@ -9,6 +9,8 @@ import java.util.*;
 public class BusinessResourceController {
     private final JdbcBusinessResources resources;
     public BusinessResourceController(JdbcBusinessResources resources){this.resources=resources;}
+    public record Watch(boolean enabled){}
+    @PostMapping("/{operation}/watch") public void watch(@PathVariable String session,@PathVariable String operation,@RequestBody Watch request){resources.watch(session,operation,request.enabled());}
     @GetMapping public List<Map<String,Object>> list(@PathVariable String session){return resources.list(session);}
     @GetMapping("/{operation}/history") public List<Map<String,Object>> history(@PathVariable String session,@PathVariable String operation){return resources.history(session,operation);}
     @PostMapping("/{operation}/observations") public void report(@PathVariable String session,@PathVariable String operation,@RequestBody JdbcBusinessResources.Report report){resources.report(session,operation,report);}

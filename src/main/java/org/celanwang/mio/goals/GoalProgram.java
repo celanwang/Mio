@@ -23,7 +23,7 @@ public record GoalProgram(String goalId,long goalRevision,long revision,Map<Stri
         public Policy(boolean enabled,long until,int maxActivations,int intervalSeconds,int parallelism,Set<String> capabilities){this(enabled,until,maxActivations,intervalSeconds,parallelism,capabilities,false);}
         public Policy{
             capabilities=capabilities==null?Set.of():Set.copyOf(capabilities);
-            if(until<0||maxActivations<1||maxActivations>100||intervalSeconds<30||intervalSeconds>86400||parallelism<1||parallelism>4||capabilities.size()>20)
+            if(until<0||maxActivations<1||maxActivations>10000||intervalSeconds<30||intervalSeconds>86400||parallelism<1||parallelism>4||capabilities.size()>20)
                 throw new IllegalArgumentException("执行范围、期限或额度无效");
         }
     }

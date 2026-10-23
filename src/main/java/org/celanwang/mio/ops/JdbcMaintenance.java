@@ -20,7 +20,7 @@ public final class JdbcMaintenance {
     public record Plan(int schemaVersion, Operation operation, String target, String digest, Map<String,Long> affected) {}
     private static final List<String> TABLES = List.of("execution_leases", "goals", "tasks", "task_queue",
             "goal_budgets", "budget_calls", "memory_jobs", "memory_usage_days", "memory_usage_calls", "operation_claims");
-    private static final List<String> OPTIONAL_TABLES=List.of("goal_programs","goal_proposals","goal_wakeups","goal_resources","resource_observations","workspace_documents","goal_notifications","goal_deliveries");
+    private static final List<String> OPTIONAL_TABLES=List.of("goal_programs","goal_proposals","goal_wakeups","goal_resources","resource_observations","workspace_documents","goal_notifications","goal_deliveries","goal_windows","goal_context_archives","document_chunks","episode_vectors","resource_watches","schema_migrations","forgotten_episodes");
     private List<String> tables(){var result=new ArrayList<>(TABLES);for(String table:OPTIONAL_TABLES)if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass(?) IS NOT NULL",Boolean.class,table)))result.add(table);return result;}
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;

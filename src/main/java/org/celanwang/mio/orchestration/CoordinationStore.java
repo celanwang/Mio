@@ -8,6 +8,7 @@ public interface CoordinationStore {
     void createGoal(GoalRecord goal);
     void saveGoal(GoalRecord expected, GoalRecord next);
     List<TaskRecord> tasks(String sessionId);
+    default long activeTaskCount(String session){return tasks(session).stream().filter(t->!t.status().terminal()).count();}
     Optional<TaskRecord> task(String id);
     void createTask(TaskRecord task);
     void saveTask(TaskRecord expected, TaskRecord next, String event);

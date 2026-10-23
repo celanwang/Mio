@@ -15,7 +15,11 @@ public final class JdbcMemoryJobs {
         if(maxAttempts<1||maxAttempts>10||leaseMillis<90000||leaseMillis>900000||retryMillis<1||retryMillis>3600000)throw new IllegalArgumentException("记忆任务重试或租约配置无效");
         this.jdbc=jdbc;this.tx=new TransactionTemplate(new DataSourceTransactionManager(source));this.maxAttempts=maxAttempts;this.leaseMillis=leaseMillis;this.retryMillis=retryMillis;
     }
+    private String indexNamespace="legacy";
+    public void configureIndex(String namespace){this.indexNamespace=namespace==null?"legacy":namespace;}
+    private String cursorId(){return indexNamespace.equals("legacy")?"episode-index-v1":"episode-index-v2:"+indexNamespace;}
     public void initialize(){
+        jdbc.execute("CREATE TABLE IF NOT EXISTS forgotten_episodes(id TEXT PRIMARY KEY,forgotten_at BIGINT NOT NULL)");
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS memory_jobs(
                   id TEXT PRIMARY KEY,message_id TEXT NOT NULL REFERENCES messages(id),kind TEXT NOT NULL,
@@ -34,6 +38,8 @@ public final class JdbcMemoryJobs {
     public Optional<MemoryJob> find(String id){return jdbc.query("SELECT * FROM memory_jobs WHERE id=?",ROW,id).stream().findFirst();}
     public EpisodeStore.AppendResult append(EpisodeStore.Episode episode,boolean index,boolean distill){
         return tx.execute(status->{
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtext('mio-episode'),hashtext(?))",Object.class,episode.id());
+            if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM forgotten_episodes WHERE id=?)",Boolean.class,episode.id())))return EpisodeStore.AppendResult.EXISTING;
             int inserted=jdbc.update("INSERT INTO messages(id,session_id,ts,role,text) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING",episode.id(),episode.sessionId(),episode.timestamp(),episode.role(),episode.text());
             if(inserted==0){
                 Integer same=jdbc.queryForObject("SELECT COUNT(*) FROM messages WHERE id=? AND session_id IS NOT DISTINCT FROM ? AND role=? AND text=?",Integer.class,episode.id(),episode.sessionId(),episode.role(),episode.text());
@@ -46,18 +52,19 @@ public final class JdbcMemoryJobs {
         });
     }
     private void enqueue(String messageId,MemoryJob.Kind kind){enqueue(messageId,kind,kind==MemoryJob.Kind.DISTILL?0:1);}
-    private void enqueue(String messageId,MemoryJob.Kind kind,int priority){long at=now();jdbc.update("INSERT INTO memory_jobs(id,message_id,kind,priority,state,created_at,updated_at) VALUES (?,?,?,?,'READY',?,?) ON CONFLICT DO NOTHING",kind.name()+":"+messageId,messageId,kind.name(),priority,at,at);}
+    private void enqueue(String messageId,MemoryJob.Kind kind,int priority){long at=now();jdbc.update("INSERT INTO memory_jobs(id,message_id,kind,priority,state,created_at,updated_at) VALUES (?,?,?,?,'READY',?,?) ON CONFLICT DO NOTHING",(kind==MemoryJob.Kind.INDEX&&!indexNamespace.equals("legacy")?"INDEX:"+indexNamespace+":"+messageId:kind.name()+":"+messageId),messageId,kind.name(),priority,at,at);}
     /** Only legacy index work is backfilled. Historical user text is never silently re-distilled. */
     public int backfillPage(int limit){
         if(limit<1||limit>500)throw new IllegalArgumentException("分页大小无效");
         return tx.execute(status->{
-            var cursor=jdbc.queryForMap("SELECT cursor,finished FROM memory_backfills WHERE id='episode-index-v1' FOR UPDATE");
+            jdbc.update("INSERT INTO memory_backfills(id) VALUES (?) ON CONFLICT DO NOTHING",cursorId());
+            var cursor=jdbc.queryForMap("SELECT cursor,finished FROM memory_backfills WHERE id=? FOR UPDATE",cursorId());
             if(((Number)cursor.get("finished")).intValue()==1)return 0;
-            if(jdbc.queryForObject("SELECT COUNT(*) FROM memory_jobs WHERE state IN ('READY','RUNNING','RETRY') AND kind='INDEX'",Long.class)>=1000)return 0;
+            if(jdbc.queryForObject("SELECT COUNT(*) FROM memory_jobs WHERE state IN ('READY','RUNNING','RETRY') AND kind='INDEX' AND id LIKE ?",Long.class,indexNamespace.equals("legacy")?"INDEX:%":"INDEX:"+indexNamespace+":%")>=1000)return 0;
             var ids=jdbc.query("SELECT m.id FROM messages m WHERE m.id>? ORDER BY m.id LIMIT ?",(r,n)->r.getString(1),cursor.get("cursor"),limit);
-            for(String id:ids)if(!Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM embeddings WHERE id=?)",Boolean.class,id)))enqueue(id,MemoryJob.Kind.INDEX,5);
-            if(ids.isEmpty())jdbc.update("UPDATE memory_backfills SET finished=1 WHERE id='episode-index-v1'");
-            else jdbc.update("UPDATE memory_backfills SET cursor=? WHERE id='episode-index-v1'",ids.get(ids.size()-1));
+            for(String id:ids)if(!Boolean.TRUE.equals(indexNamespace.equals("legacy")?jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM embeddings WHERE id=?)",Boolean.class,id):jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM episode_vectors v JOIN messages m ON m.id=v.id WHERE v.namespace=? AND v.id=? AND v.source_hash=md5(m.text))",Boolean.class,indexNamespace,id)))enqueue(id,MemoryJob.Kind.INDEX,5);
+            if(ids.isEmpty())jdbc.update("UPDATE memory_backfills SET finished=1 WHERE id=?",cursorId());
+            else jdbc.update("UPDATE memory_backfills SET cursor=? WHERE id=?",ids.get(ids.size()-1),cursorId());
             return ids.size();
         });
     }
@@ -74,8 +81,8 @@ public final class JdbcMemoryJobs {
                 else firstDistill=first.get(0).id();
             }
             if(kinds.isEmpty())return Optional.empty();String placeholders=String.join(",",Collections.nCopies(kinds.size(),"?"));
-            var args=new ArrayList<Object>(kinds);args.add(at);args.add(at);args.add(maxAttempts);args.add(maxAttempts+2);args.add(firstDistill);
-            var rows=jdbc.query("SELECT * FROM memory_jobs WHERE kind IN ("+placeholders+") AND ((state IN ('READY','RETRY') AND next_attempt_at<=?) OR (state='RUNNING' AND lease_until<=?)) AND attempts<CASE WHEN result IS NULL THEN ? ELSE ? END AND (kind<>'DISTILL' OR id=?) ORDER BY CASE WHEN result IS NOT NULL THEN 0 ELSE 1 END,priority,sequence FOR UPDATE SKIP LOCKED LIMIT 1",ROW,args.toArray());
+            var args=new ArrayList<Object>(kinds);args.add(at);args.add(at);args.add(maxAttempts);args.add(maxAttempts+2);args.add(firstDistill);args.add(indexNamespace.equals("legacy")?"INDEX:%":"INDEX:"+indexNamespace+":%");
+            var rows=jdbc.query("SELECT * FROM memory_jobs WHERE kind IN ("+placeholders+") AND ((state IN ('READY','RETRY') AND next_attempt_at<=?) OR (state='RUNNING' AND lease_until<=?)) AND attempts<CASE WHEN result IS NULL THEN ? ELSE ? END AND (kind<>'DISTILL' OR id=?) AND (kind<>'INDEX' OR id LIKE ?) ORDER BY CASE WHEN result IS NOT NULL THEN 0 ELSE 1 END,priority,sequence FOR UPDATE SKIP LOCKED LIMIT 1",ROW,args.toArray());
             if(rows.isEmpty())return Optional.empty();var old=rows.get(0);String owner=UUID.randomUUID().toString();
             jdbc.update("UPDATE memory_jobs SET state='RUNNING',attempts=attempts+1,generation=generation+1,owner=?,lease_until=?,error_code='',updated_at=? WHERE id=?",owner,Math.addExact(at,leaseMillis),at,old.id());
             return Optional.of(find(old.id()).orElseThrow().claim());

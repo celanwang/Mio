@@ -60,7 +60,8 @@ public class TencentRideService {
         try{saved=json.copy().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(Files.readString(receipt,StandardCharsets.UTF_8));}
         catch(IOException unreadable){throw new IllegalStateException("无法读取关联回执，已停止核查",unreadable);}
         if(!logicalId.equals(saved.path("logicalId").asText())||!scopeKey.equals(saved.path("scopeKey").asText()))throw new IllegalStateException("回执关联不匹配");
-        String observed=execute(sessionId,Map.of("command","query-ongoing-order","parameters",Map.of()));
+        var verified=new org.celanwang.mio.orchestration.TencentOrderReceiptVerifier().verify(json.writeValueAsString(saved.path("receipt")));
+        String observed=verified.outcome()==org.celanwang.mio.orchestration.OperationOutcome.CONFIRMED_APPLIED?execute(sessionId,Map.of("command","query-order","parameters",Map.of("order_id",verified.businessId()))):"{}";
         return json.writeValueAsString(Map.of("logicalId",logicalId,"scopeKey",scopeKey,"createReceipt",saved.path("receipt"),"currentOrder",observed));
     }
 

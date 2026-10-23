@@ -702,6 +702,8 @@ $('export').onclick = () => {
   link.href = url; link.download = 'Mio-对话-' + new Date().toLocaleDateString('sv-SE') + '.md'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),1000); toast('Markdown 对话已导出');
 };
 loadChat();
+const linkedGoal = new URLSearchParams(location.search).get('session');
+if (linkedGoal && /^[a-zA-Z0-9_-]{1,200}$/.test(linkedGoal)) { chat=createChat();chat.id=linkedGoal;chat.sessionId=linkedGoal;chat.multiAgent=true;save();render(); }
 if (chat.multiAgent) refreshTasks().catch(() => {});
 addEventListener('focus', () => { if (!busy && chat.multiAgent) refreshTasks().catch(() => {}); });
 if (chat.weiboAuthorizationPending && !document.hidden) resumeWeiboAuthorization();

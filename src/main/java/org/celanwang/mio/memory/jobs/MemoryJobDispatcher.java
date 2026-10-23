@@ -21,7 +21,7 @@ public final class MemoryJobDispatcher {
     public MemoryJobDispatcher(JdbcMemoryJobs jobs,JdbcMemoryUsage usage,EpisodeStore episodes,VectorStore vectors,EmbeddingClient embedding,ProfileDistiller distiller,ObjectMapper json,
                                boolean enabled,boolean indexEnabled,boolean modelConfigured,int parallelism,int pageSize){
         if(parallelism<1||parallelism>4||pageSize<1||pageSize>500)throw new IllegalArgumentException("记忆消费者并发或分页参数无效");
-        this.jobs=jobs;this.usage=usage;this.episodes=episodes;this.vectors=vectors;this.embedding=embedding;this.distiller=distiller;
+        this.jobs=jobs;jobs.configureIndex(vectors.namespace());this.usage=usage;this.episodes=episodes;this.vectors=vectors;this.embedding=embedding;this.distiller=distiller;
         this.json=json.copy().enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
         this.enabled=enabled;this.indexEnabled=indexEnabled;this.modelConfigured=modelConfigured;this.parallelism=parallelism;this.pageSize=pageSize;slots=new Semaphore(parallelism);
         workers=new ThreadPoolExecutor(parallelism,parallelism,0,TimeUnit.MILLISECONDS,new SynchronousQueue<>(),r->{var thread=new Thread(r,"memory-durable-worker");thread.setDaemon(true);return thread;},new ThreadPoolExecutor.AbortPolicy());

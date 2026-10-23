@@ -9,6 +9,8 @@ public final class GoalProgramExecutor {
     private final JdbcGoalPrograms programs;private final JdbcGoalWakeups wakeups;private final TaskRuntime runtime;private final ExecutionLeaseStore leases;private final GoalBudgetStore budgets;private final AgentRegistry registry;
     private final RunBudget.Limits limits;private final GoalBudgetStore.Limits goalLimits;
     private java.util.function.Consumer<String> progress=session->{};
+    private JdbcBusinessResources resources;
+    public void withResources(JdbcBusinessResources resources){this.resources=resources;}
     public void onProgress(java.util.function.Consumer<String> listener){progress=listener;}
     public GoalProgramExecutor(JdbcGoalPrograms programs,JdbcGoalWakeups wakeups,TaskRuntime runtime,ExecutionLeaseStore leases,GoalBudgetStore budgets,AgentRegistry registry,RunBudget.Limits limits,GoalBudgetStore.Limits goalLimits){this.programs=programs;this.wakeups=wakeups;this.runtime=runtime;this.leases=leases;this.budgets=budgets;this.registry=registry;this.limits=limits;this.goalLimits=goalLimits;}
     public void run(JdbcGoalWakeups.Claim claim){
@@ -26,7 +28,7 @@ public final class GoalProgramExecutor {
                 var results=reactor.core.publisher.Flux.fromIterable(ready).flatMap(step->reactor.core.publisher.Mono.fromCallable(()->Map.entry(step,executeStep(claim.session(),p,step,parents,budget))).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()),p.policy().parallelism()).collectList().block(Duration.ofMillis(limits.millis()));
                 for(var result:results){remaining.remove(result.getKey());if(ready(result.getKey(),result.getValue()))completed.put(result.getKey().id(),result.getValue());}
             }
-            if(p.policy().trackResources())for(var task:runtime.list(claim.session()))for(var operation:task.operations())if(runtime.canReconcile(operation)){
+            if(p.policy().trackResources())for(var task:runtime.list(claim.session()))for(var operation:task.operations())if(runtime.canReconcile(operation)&&(resources==null||resources.shouldTrack(operation.id()))){
                 budget.active();runtime.reconcile(claim.session(),task.id(),operation.id(),budget).block(Duration.ofSeconds(30));
             }
             if(completed.size()==p.steps().size()&&!p.policy().trackResources()){

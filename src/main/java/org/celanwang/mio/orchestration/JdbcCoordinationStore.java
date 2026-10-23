@@ -58,6 +58,7 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     @Override public List<TaskRecord> tasks(String session) {
         return jdbc.query("SELECT content FROM tasks WHERE session_id = ? ORDER BY id",(rs,n)->decode(rs.getString(1),TaskRecord.class),session);
     }
+    @Override public long activeTaskCount(String session){return jdbc.queryForObject("SELECT count(*) FROM tasks WHERE session_id=? AND content::jsonb->>'status' NOT IN ('COMPLETED','FAILED','CANCELLED','STALE','UNKNOWN')",Long.class,session);}
     @Override public Optional<TaskRecord> task(String id) {
         return jdbc.query("SELECT content FROM tasks WHERE id = ?",(rs,n)->decode(rs.getString(1),TaskRecord.class),id).stream().findFirst();
     }
