@@ -119,7 +119,7 @@ public final class TaskRuntime {
             var task=new TaskRecord(UUID.randomUUID().toString(),session,goal.id(),goal.revision(),spec,UUID.randomUUID().toString(),
                     capability.executionVersion(),spec.dispatch()==TaskSpec.Dispatch.QUEUED?TaskStatus.QUEUED:TaskStatus.WAITING_DEPENDENCY,
                     spec.dispatch()==TaskSpec.Dispatch.QUEUED?"已进入准备队列，前置任务就绪后可领取执行":"",null,List.of(),false,List.of(),0,clock.millis(),clock.millis());
-            budget.fenced(()->{if(spec.dispatch()==TaskSpec.Dispatch.QUEUED)queue.enqueue(task);else store.createTask(task);return null;});
+            budget.fenced(()->{if(store.tasks(session).size()>=maxTasks)throw new RunBudget.BudgetExceeded("会话任务数量已达上限");if(spec.dispatch()==TaskSpec.Dispatch.QUEUED)queue.enqueue(task);else store.createTask(task);return null;});
             return spec.dispatch()==TaskSpec.Dispatch.QUEUED?Mono.just(task):runWhenReady(task,goal,budget);
         });
     }
@@ -313,4 +313,5 @@ public final class TaskRuntime {
             return adapter.reconcile(task,op).map(receipt->{store.recordReceipt(taskId,operationId,receipt,clock.millis());return require(session,taskId);});
         });
     }
+    public boolean canReconcile(OperationRecord operation){return reconcilers.stream().anyMatch(adapter->adapter.supports(operation));}
 }

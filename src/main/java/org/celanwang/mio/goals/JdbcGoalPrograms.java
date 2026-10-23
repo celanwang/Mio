@@ -22,9 +22,9 @@ public final class JdbcGoalPrograms {
         var previous=find(goal.id()).orElse(null);long expected=previous==null?0:previous.revision();if(expected!=request.expectedRevision())throw new IllegalStateException("计划已被修改，请刷新");
         var next=build(goal,previous,request);var affected=new HashSet<String>();
         if(previous!=null)for(var step:previous.steps())if(!Objects.equals(previous.generations().get(step.id()),next.generations().get(step.id())))affected.add(previous.taskKey(step));
-        for(var task:store.tasks(session))if(affected.contains(task.spec().key())&&!task.status().terminal()){
+        for(var task:store.tasks(session))if(affected.contains(task.spec().key())&&task.invalidation()==null){
             if(task.status()==TaskStatus.RUNNING)throw new IllegalStateException("准备任务仍在运行，请先暂停目标再修改");
-            store.saveTask(task,task.next(TaskStatus.STALE,"目标字段或步骤已修改",List.of(),task.effectStarted(),System.currentTimeMillis()),"program_step_invalidated");
+            store.saveTask(task,task.invalidate(new TaskInvalidation(TaskInvalidation.Code.FACT_CHANGED,task.id(),task.id(),"","goal_fields",System.currentTimeMillis()),System.currentTimeMillis()),"program_step_invalidated");
         }
         jdbc.update("INSERT INTO goal_programs(goal_id,revision,content,next_at) VALUES (?,?,?,0) ON CONFLICT(goal_id) DO UPDATE SET revision=EXCLUDED.revision,content=EXCLUDED.content,next_at=0,last_error=''",goal.id(),next.revision(),encode(next));
         jdbc.update("DELETE FROM goal_proposals WHERE goal_id=?",goal.id());event(goal,"goal_program_saved",Map.of("revision",next.revision(),"affected",affected));return next;
@@ -45,6 +45,16 @@ public final class JdbcGoalPrograms {
         return new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);
     }
     public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();build(goal,find(goal.id()).orElse(null),request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
+    public GoalProgram refresh(String session,long expected,Set<String> roots){return tx.execute(status->{
+        var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");var previous=find(goal.id()).orElseThrow();if(previous.revision()!=expected)throw new IllegalStateException("计划已更新，请刷新");
+        var affected=new HashSet<>(roots);if(affected.isEmpty()||!previous.generations().keySet().containsAll(affected))throw new IllegalArgumentException("请选择现有步骤");
+        boolean expanded;do{expanded=false;for(var step:previous.steps())if(!affected.contains(step.id())&&!Collections.disjoint(step.dependencies(),affected))expanded|=affected.add(step.id());}while(expanded);
+        var keys=previous.steps().stream().filter(s->affected.contains(s.id())).map(previous::taskKey).collect(java.util.stream.Collectors.toSet());
+        for(var task:store.tasks(session))if(keys.contains(task.spec().key())&&task.invalidation()==null){if(task.status()==TaskStatus.RUNNING)throw new IllegalStateException("步骤仍在运行");store.saveTask(task,task.invalidate(new TaskInvalidation(TaskInvalidation.Code.FACT_CHANGED,task.id(),task.id(),"","refresh",System.currentTimeMillis()),System.currentTimeMillis()),"program_step_refreshed");}
+        var generations=new HashMap<>(previous.generations());affected.forEach(id->generations.put(id,generations.get(id)+1));
+        var next=new GoalProgram(previous.goalId(),previous.goalRevision(),previous.revision()+1,previous.fields(),previous.steps(),previous.policy(),generations);
+        jdbc.update("UPDATE goal_programs SET revision=?,content=?,next_at=0 WHERE goal_id=?",next.revision(),encode(next),goal.id());event(goal,"goal_program_refreshed",Map.of("steps",affected,"revision",next.revision()));return next;
+    });}
     private GoalRecord lockGoal(String session){jdbc.queryForObject("SELECT id FROM goals WHERE session_id=? FOR UPDATE",String.class,session);return store.goal(session).orElseThrow();}
     public void event(GoalRecord goal,String type,Object detail){jdbc.update("INSERT INTO events(id,ts,session_id,node,type,title,detail) VALUES (?,?,?,?,?,?,?)","program:"+UUID.randomUUID(),System.currentTimeMillis(),goal.sessionId(),"goal",type,type,encode(detail));}
     private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("计划编码失败",e);}}

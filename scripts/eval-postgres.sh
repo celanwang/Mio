@@ -15,4 +15,4 @@ export MIO_TEST_PG_URL="jdbc:postgresql://$mio_eval_binding/postgres"
 export MIO_TEST_PG_USERNAME=postgres
 export MIO_TEST_PG_PASSWORD=mio-eval-only
 export MIO_TEST_PG_CONTAINER="$mio_eval_container"
-./scripts/eval.sh
+if [[ "$#" -gt 0 ]]; then ./scripts/mvn.sh "$@"; else ./scripts/eval.sh; fi

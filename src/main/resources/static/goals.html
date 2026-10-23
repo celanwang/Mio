@@ -4,4 +4,6 @@
 <section><div class="row"><label>会话 <input id="session"></label><button id="load">读取目标</button><a href="index.html">返回对话</a></div><p id="intent"></p><div id="policy"></div></section>
 <section><h2>目标字段</h2><div id="fields"></div><button id="add-field">新增字段</button><h2>准备步骤</h2><div id="steps"></div><button id="add-step">新增步骤</button><div><button id="save">保存并确认范围</button><button id="proposal" hidden>载入模型建议供确认</button></div></section>
 <section><h2>执行进度</h2><div class="row"><button id="wake">推进一次</button><button id="refresh">刷新</button></div><div id="progress"></div></section>
+<section><h2>业务资源与履约</h2><p class="muted">创建回执不代表履约完成。人工核实单独留痕，不解除未知操作占位。</p><div id="resources"></div></section>
+<section><h2>方案比较</h2><p class="muted">仅比较可信且仍有效的数值证据，同单位分组，不自动选择或下单。</p><div class="row"><input id="compare-field" placeholder="契约字段，如 durationSeconds"><select id="compare-order"><option value="false">从小到大</option><option value="true">从大到小</option></select><button id="compare">比较</button></div><div id="comparison"></div></section>
 <script src="goals.js"></script></html>

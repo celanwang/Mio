@@ -1,0 +1,41 @@
+package org.celanwang.mio.goals;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.celanwang.mio.orchestration.*;
+import org.celanwang.mio.security.PolicyEngine;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import java.time.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import reactor.core.publisher.Mono;
+import static org.assertj.core.api.Assertions.*;
+
+@EnabledIfEnvironmentVariable(named="MIO_TEST_PG_URL",matches="jdbc:postgresql:.*")
+class JdbcGoalProgramsIntegrationTest {
+    JdbcTemplate admin,jdbc;String schema;JdbcCoordinationStore store;JdbcGoalPrograms programs;JdbcGoalWakeups wakeups;GoalProgramExecutor executor;TaskRuntime runtime;final AtomicInteger calls=new AtomicInteger();
+    @BeforeEach void init(){
+        String url=System.getenv("MIO_TEST_PG_URL"),user=System.getenv().getOrDefault("MIO_TEST_PG_USERNAME","postgres"),password=System.getenv().getOrDefault("MIO_TEST_PG_PASSWORD","");admin=new JdbcTemplate(new DriverManagerDataSource(url,user,password));schema="mio_program_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE SCHEMA "+schema);
+        var source=new DriverManagerDataSource(url+(url.contains("?")?"&":"?")+"currentSchema="+schema,user,password);jdbc=new JdbcTemplate(source);var json=new ObjectMapper();jdbc.execute("CREATE TABLE events(id TEXT PRIMARY KEY,ts BIGINT NOT NULL,session_id TEXT,node TEXT,type TEXT,title TEXT,detail TEXT)");
+        store=new JdbcCoordinationStore(jdbc,source,json);store.initialize();store.createGoal(new GoalRecord("g","s",1,"prepare","prepare",1,1));var leases=new JdbcExecutionLeaseStore(jdbc,source);leases.initialize();var budgets=new JdbcGoalBudgetStore(jdbc,source,json);budgets.initialize();var queue=new JdbcTaskQueue(jdbc,source,json,store,leases);queue.initialize();
+        var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));programs=new JdbcGoalPrograms(jdbc,source,json,store,registry);programs.initialize();wakeups=new JdbcGoalWakeups(jdbc,source,programs,store);wakeups.initialize();store.onTaskChanged(wakeups::signal);
+        runtime=new TaskRuntime(store,registry,(task,goal,input,execution)->{calls.incrementAndGet();return Mono.just(new TaskWorker.Result("prepared",false,List.of(),null));},new PolicyEngine("shadow"),Clock.systemUTC(),32,List.of(),List.of(),List.of(),leases,queue);
+        executor=new GoalProgramExecutor(programs,wakeups,runtime,leases,budgets,registry,new RunBudget.Limits(20,20,20,1000,10000,10000),new GoalBudgetStore.Limits(100,100,100,10000));
+    }
+    @AfterEach void cleanup(){admin.execute("DROP SCHEMA "+schema+" CASCADE");}
+    GoalProgram.Request request(long revision,String place){return new GoalProgram.Request(revision,1,Map.of("place",place,"budget","100"),List.of(new GoalProgram.Step("route","domain","route",List.of("place"),List.of(),"report",List.of()),new GoalProgram.Step("compare","domain","compare",List.of("budget"),List.of("route"),"report",List.of()),new GoalProgram.Step("other","domain","other",List.of("budget"),List.of(),"report",List.of())),new GoalProgram.Policy(false,System.currentTimeMillis()+3600000,5,60,1,Set.of("domain")));}
+    @Test void fieldEditsInvalidateOnlyAffectedStepsAndTheirDependants(){
+        var first=programs.save("s",request(0,"上海"));wakeups.wake("s","one");executor.run(wakeups.claim().orElseThrow());assertThat(calls.get()).isEqualTo(3);
+        var second=programs.save("s",request(1,"杭州"));assertThat(second.generations()).containsEntry("route",2L).containsEntry("compare",2L).containsEntry("other",1L);
+        assertThat(store.tasks("s").stream().filter(t->t.spec().key().equals(first.taskKey(first.steps().get(0)))).findFirst().orElseThrow().invalidation()).isNotNull();
+        wakeups.wake("s","two");executor.run(wakeups.claim().orElseThrow());assertThat(calls.get()).isEqualTo(5);
+        assertThatThrownBy(()->programs.save("s",request(1,"其他"))).isInstanceOf(IllegalStateException.class);
+    }
+    @Test void duplicateWakeupsAndRestartedExecutorNeverReplayCompletedPreparation(){
+        programs.save("s",request(0,"上海"));wakeups.wake("s","same");wakeups.wake("s","same");assertThat(jdbc.queryForObject("SELECT count(*) FROM goal_wakeups",Long.class)).isEqualTo(1);executor.run(wakeups.claim().orElseThrow());
+        wakeups.wake("s","next");executor.run(wakeups.claim().orElseThrow());assertThat(calls.get()).isEqualTo(3);assertThat(jdbc.queryForObject("SELECT activations FROM goal_programs",Integer.class)).isEqualTo(2);
+        assertThat(executor.status("s")).containsKey("steps");assertThat(jdbc.queryForObject("SELECT count(*) FROM goal_wakeups WHERE state='DONE'",Long.class)).isEqualTo(2);
+    }
+}

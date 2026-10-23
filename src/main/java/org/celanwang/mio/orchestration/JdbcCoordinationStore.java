@@ -13,6 +13,8 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     private final ObjectMapper json;
     private final TransactionTemplate transaction;
     private final java.time.Clock clock;
+    private java.util.function.Consumer<TaskRecord> taskListener=task->{};
+    public void onTaskChanged(java.util.function.Consumer<TaskRecord> listener){this.taskListener=Objects.requireNonNull(listener);}
     public JdbcCoordinationStore(JdbcTemplate jdbc, DataSource source, ObjectMapper json) {
         this(jdbc,source,json,java.time.Clock.systemUTC());
     }
@@ -73,6 +75,7 @@ public final class JdbcCoordinationStore implements CoordinationStore {
                     next.revision(),encode(next),next.goalRevision(),next.id(),expected.revision());
             if(changed!=1)throw new IllegalStateException("任务已被取消或修改");
             event(next.sessionId(),type,next.id()+":"+next.revision(),next);
+            taskListener.accept(next);
         });
     }
     @Override public void startOperation(TaskRecord expected, OperationRecord operation, long now) {

@@ -16,7 +16,8 @@ public record GoalProgram(String goalId,long goalRevision,long revision,Map<Stri
             if(fields.size()>20||dependencies.size()>8||checks.size()>8||new HashSet<>(dependencies).size()!=dependencies.size())throw new IllegalArgumentException("步骤依赖或条件过多");
         }
     }
-    public record Policy(boolean enabled,long until,int maxActivations,int intervalSeconds,int parallelism,Set<String> capabilities){
+    public record Policy(boolean enabled,long until,int maxActivations,int intervalSeconds,int parallelism,Set<String> capabilities,boolean trackResources){
+        public Policy(boolean enabled,long until,int maxActivations,int intervalSeconds,int parallelism,Set<String> capabilities){this(enabled,until,maxActivations,intervalSeconds,parallelism,capabilities,false);}
         public Policy{
             capabilities=capabilities==null?Set.of():Set.copyOf(capabilities);
             if(until<0||maxActivations<1||maxActivations>100||intervalSeconds<30||intervalSeconds>86400||parallelism<1||parallelism>4||capabilities.size()>20)
