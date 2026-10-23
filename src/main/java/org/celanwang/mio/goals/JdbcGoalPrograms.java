@@ -37,12 +37,13 @@ public final class JdbcGoalPrograms {
         var affected=new HashSet<String>();for(var step:request.steps()){
             var old=previous==null?null:previous.steps().stream().filter(s->s.id().equals(step.id())).findFirst().orElse(null);
             if(old==null||!old.equals(step)||step.fields().isEmpty()&&!changed.isEmpty()||!Collections.disjoint(step.fields(),changed)||previous.goalRevision()!=goal.revision())affected.add(step.id());
-            var spec=new TaskSpec("validate",step.capabilityId(),step.objective(),List.of(),List.of(),TaskScope.PREPARE,List.of(),"default",TaskSpec.Dispatch.QUEUED,step.outputContract());var capability=registry.require(step.capabilityId());capability.validateSpec(spec);
+            var bindings=step.inputs().entrySet().stream().map(entry->{var parts=entry.getValue().split("/",2);return new InputBinding(parts[0],parts[1],"planned",entry.getKey());}).toList();
+            var spec=new TaskSpec("planned_"+UUID.randomUUID(),step.capabilityId(),step.objective(),List.of(),step.dependencies(),TaskScope.PREPARE,bindings,step.inputContract(),TaskSpec.Dispatch.QUEUED,step.outputContract());var capability=registry.require(step.capabilityId());capability.validateSpec(spec);
             var contract=capability.outputContract(spec);for(var check:step.checks())check.validate(contract.fields().stream().filter(f->f.id().equals(check.fieldId())).findFirst().orElseThrow(()->new IllegalArgumentException("验收字段不存在")));
         }
         boolean expanded;do{expanded=false;for(var step:request.steps())if(!affected.contains(step.id())&&!Collections.disjoint(step.dependencies(),affected))expanded|=affected.add(step.id());}while(expanded);
         var generations=new HashMap<String,Long>();for(var step:request.steps()){long old=previous==null?0:previous.generations().getOrDefault(step.id(),0L);generations.put(step.id(),old==0?1:affected.contains(step.id())?old+1:old);}
-        return new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);
+        var next=new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);for(var step:next.steps())next.task(step,List.of());return next;
     }
     public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();build(goal,find(goal.id()).orElse(null),request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
     public GoalProgram refresh(String session,long expected,Set<String> roots){return tx.execute(status->{

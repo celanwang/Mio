@@ -25,15 +25,15 @@ class MultiAgentConfigTest {
                     assertThat(context).doesNotHaveBean(TaskRuntime.class).doesNotHaveBean(JdbcAgentStateStore.class);
                 });
     }
-    @Test void enabledModeWiresAllThreeDomainsWithoutStartingExternalServices(){
+    @Test void enabledModeWiresBusinessAndKnowledgeDomainsWithoutStartingExternalServices(){
         new ApplicationContextRunner().withUserConfiguration(Dependencies.class,MultiAgentConfig.class)
                 .withPropertyValues("app.multi-agent.enabled=true").run(context->{
                     assertThat(context).hasSingleBean(TaskRuntime.class).hasSingleBean(MultiAgentChatService.class);
                     assertThat(context.getBean(AgentRegistry.class).list().stream().map(AgentCapability::id).toList())
-                            .containsExactlyInAnyOrder("mcd-ordering","tencent-ride","weibo-assistant");
+                            .containsExactlyInAnyOrder("mcd-ordering","tencent-ride","weibo-assistant","research-assistant","document-assistant");
                     var budget=new RunBudget(new RunBudget.Limits(2,2,2,1000,10000,1000),Clock.systemUTC());
                     try(var root=context.getBean(SupervisorFactory.class).create("fixture",budget)){
-                        assertThat(root.getToolkit().getToolNames()).containsExactlyInAnyOrder("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task","read_goal_acceptance");
+                        assertThat(root.getToolkit().getToolNames()).containsExactlyInAnyOrder("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task","read_goal_acceptance","propose_goal_program");
                     }
                     verifyNoInteractions(context.getBean(DataSource.class),context.getBean(WeiboMcpService.class),context.getBean(TencentRideService.class));
                 });

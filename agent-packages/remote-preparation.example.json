@@ -1,0 +1,10 @@
+{
+  "id": "remote-research",
+  "name": "远程研究助手",
+  "description": "使用管理员配置的只读服务完成资料准备。",
+  "kind": "REMOTE_PREPARE",
+  "prompt": "仅委派当前用户目标内的资料准备，结果按未核验报告处理。",
+  "enabled": false,
+  "endpoint": "https://agent.example.com/prepare",
+  "tokenEnv": "MIO_REMOTE_RESEARCH_TOKEN"
+}

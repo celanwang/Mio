@@ -38,4 +38,12 @@ class JdbcGoalProgramsIntegrationTest {
         wakeups.wake("s","next");executor.run(wakeups.claim().orElseThrow());assertThat(calls.get()).isEqualTo(3);assertThat(jdbc.queryForObject("SELECT activations FROM goal_programs",Integer.class)).isEqualTo(2);
         assertThat(executor.status("s")).containsKey("steps");assertThat(jdbc.queryForObject("SELECT count(*) FROM goal_wakeups WHERE state='DONE'",Long.class)).isEqualTo(2);
     }
+    @Test void documentsKeepVersionsAndResourceReportsNeverBecomeProviderEvidence(){
+        var documents=new JdbcDocuments(jdbc,Objects.requireNonNull(jdbc.getDataSource()),store);documents.initialize();var doc=documents.save("notes",new JdbcDocuments.Save("notes","原始资料",0),null);assertThat(documents.search("资料")).hasSize(1);assertThatThrownBy(()->documents.save("notes",new JdbcDocuments.Save("notes","changed",0),null)).isInstanceOf(IllegalStateException.class);assertThat(documents.read("notes").revision()).isEqualTo(1);
+        var resources=new JdbcBusinessResources(jdbc,jdbc.getDataSource(),store,new ObjectMapper());resources.initialize();store.onTaskChanged(task->{wakeups.signal(task);resources.changed(task);});
+        var receipt=new OperationReceipt("receipt","trusted-fixture","SUCCESS","",OperationOutcome.CONFIRMED_APPLIED,"business",1);var operation=new OperationRecord("operation","call","write","hash",1,"VERIFIED","",OperationOutcome.CONFIRMED_APPLIED,"business",List.of(receipt));
+        var task=new TaskRecord("written","s","g",1,new TaskSpec("written","domain","write",List.of(),List.of(),TaskScope.REQUEST_APPROVAL),"child","v1",TaskStatus.RUNNING,"",null,List.of(),true,List.of(operation),0,1,1);store.createTask(task);store.saveTask(task,task.next(TaskStatus.COMPLETED,"created",List.of(),true,2),"fixture_complete");
+        var current=resources.list("s").get(0);assertThat(current.get("state")).isEqualTo("CREATED");resources.report("s","operation",new JdbcBusinessResources.Report(JdbcBusinessResources.State.COMPLETED,"人工在供应商端核实",(String)current.get("observation_id")));
+        assertThat(resources.list("s").get(0)).containsEntry("state","COMPLETED").containsEntry("source","USER_REPORTED");assertThat(resources.history("s","operation")).hasSize(2);assertThat(store.task("written").orElseThrow().operations()).containsExactly(operation);
+    }
 }

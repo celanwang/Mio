@@ -52,7 +52,7 @@ public final class JdbcBusinessResources {
         tx.executeWithoutResult(status->{var goal=store.goal(session).orElseThrow();jdbc.queryForObject("SELECT operation_id FROM goal_resources WHERE operation_id=? AND goal_id=? FOR UPDATE",String.class,operation,goal.id());
             var latest=jdbc.query("SELECT id FROM resource_observations WHERE operation_id=? ORDER BY observed_at DESC,id DESC LIMIT 1",(r,n)->r.getString(1),operation).stream().findFirst().orElse("");if(!Objects.equals(latest,report.expectedObservation()))throw new IllegalStateException("资源状态已更新，请刷新");
             String id="user:"+UUID.randomUUID();long now=System.currentTimeMillis();observe(operation,id,report.state(),"USER_REPORTED",report.evidence(),now);
-            jdbc.update("INSERT INTO events VALUES (?,?,?,?,?,?,?)","resource:"+id,now,session,"resource","resource_user_reported","resource_user_reported",operation+":"+report.state());
+            jdbc.update("INSERT INTO events(id,ts,session_id,node,type,title,detail) VALUES (?,?,?,?,?,?,?)","resource:"+id,now,session,"resource","resource_user_reported","resource_user_reported",operation+":"+report.state());
         });
     }
     public List<Map<String,Object>> history(String session,String operation){var goal=store.goal(session).orElseThrow();return jdbc.queryForList("SELECT o.* FROM resource_observations o JOIN goal_resources r ON r.operation_id=o.operation_id WHERE r.goal_id=? AND r.operation_id=? ORDER BY o.observed_at,o.id",goal.id(),operation);}

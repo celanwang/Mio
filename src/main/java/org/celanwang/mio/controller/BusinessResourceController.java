@@ -4,6 +4,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 @RestController @RequestMapping("/api/goals/{session}/resources")
+@CrossOrigin(origins={"http://localhost:63342","http://127.0.0.1:63342"})
 @ConditionalOnProperty(prefix="app.multi-agent",name="enabled",havingValue="true")
 public class BusinessResourceController {
     private final JdbcBusinessResources resources;

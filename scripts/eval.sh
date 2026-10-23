@@ -6,6 +6,7 @@ mio_eval_fingerprint=$(python3 -c 'import json; print(json.load(open("target/eva
 mio_eval_revision=$(python3 -c 'import json; print(json.load(open("target/evaluation/acceptance-run.json"))["source_revision"])')
 ./scripts/mvn.sh -B -Dmio.eval.run-id="$mio_eval_run_id" -Dmio.source-fingerprint="$mio_eval_fingerprint" -Dmio.source-revision="$mio_eval_revision" verify
 python3 -m eval.release
+node --check src/main/resources/static/goals.js
 python3 -m eval.acceptance python
 python3 -m eval.runner report --runs target/evaluation/fixture-runs.jsonl --output target/evaluation/report.json
 python3 -m eval.runner injections --runs target/evaluation/injection-fixtures.jsonl --output target/evaluation/injection-report.json

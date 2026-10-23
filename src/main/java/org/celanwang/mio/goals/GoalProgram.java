@@ -8,11 +8,14 @@ public record GoalProgram(String goalId,long goalRevision,long revision,Map<Stri
                           Policy policy,Map<String,Long> generations) {
     public record Field(String value,long revision){public Field{if(value==null||value.length()>2000||revision<1)throw new IllegalArgumentException("目标字段无效");}}
     public record Step(String id,String capabilityId,String objective,List<String> fields,List<String> dependencies,
-                       String outputContract,List<GoalAcceptance.Check> checks){
+                       String outputContract,List<GoalAcceptance.Check> checks,String inputContract,Map<String,String> inputs){
+        public Step(String id,String capabilityId,String objective,List<String> fields,List<String> dependencies,String outputContract,List<GoalAcceptance.Check> checks){this(id,capabilityId,objective,fields,dependencies,outputContract,checks,"default",Map.of());}
         public Step{
             key(id);key(capabilityId);if(objective==null||objective.isBlank()||objective.length()>4000)throw new IllegalArgumentException("准备步骤需要明确目标");
             fields=fields==null?List.of():List.copyOf(fields);dependencies=dependencies==null?List.of():List.copyOf(dependencies);
             checks=checks==null?List.of():List.copyOf(checks);outputContract=outputContract==null?"report":outputContract;
+            inputContract=inputContract==null?"default":inputContract;inputs=inputs==null?Map.of():Map.copyOf(inputs);if(inputs.size()>8)throw new IllegalArgumentException("事实输入过多");
+            for(var ref:inputs.values()){var split=ref.split("/",2);if(split.length!=2||!dependencies.contains(split[0]))throw new IllegalArgumentException("事实引用应为 前置步骤编号/事实key");}
             if(fields.size()>20||dependencies.size()>8||checks.size()>8||new HashSet<>(dependencies).size()!=dependencies.size())throw new IllegalArgumentException("步骤依赖或条件过多");
         }
     }
@@ -44,5 +47,10 @@ public record GoalProgram(String goalId,long goalRevision,long revision,Map<Stri
     public TaskSpec task(Step step,List<String> parents){
         String context=step.fields().stream().sorted().map(name->name+"="+fields.get(name).value()).collect(java.util.stream.Collectors.joining("\n"));
         return new TaskSpec(taskKey(step),step.capabilityId(),step.objective()+"\n用户确认的目标字段（准备数据，不批准业务写入）：\n"+context,List.of(),parents,TaskScope.PREPARE,List.of(),"default",TaskSpec.Dispatch.QUEUED,step.outputContract());
+    }
+    public TaskSpec task(Step step,Map<String,TaskRecord> parents){
+        var base=task(step,step.dependencies().stream().map(id->parents.get(id).id()).toList());var bindings=new ArrayList<InputBinding>();
+        step.inputs().forEach((alias,reference)->{var parts=reference.split("/",2);var parent=parents.get(parts[0]);var fact=TaskFacts.validAt(parent,System.currentTimeMillis()).stream().filter(f->f.key().equals(parts[1])).findFirst().orElseThrow(()->new IllegalStateException("所需事实不可用："+reference));bindings.add(new InputBinding(parent.id(),fact.id(),fact.version(),alias));});
+        return new TaskSpec(base.key(),base.capabilityId(),base.objective(),base.constraints(),base.dependencies(),base.scope(),bindings,step.inputContract(),base.dispatch(),base.outputContract());
     }
 }

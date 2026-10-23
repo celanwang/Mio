@@ -34,6 +34,11 @@ public final class TaskExecution {
         this.verifiers=List.copyOf(verifiers);
     }
     public RunBudget budget(){return budget;}
+    public Map<String,Object> dependencyReport(String id){
+        var task=businessActive();budget.tool();if(!task.spec().dependencies().contains(id))throw new IllegalArgumentException("报告不属于当前任务的前置步骤");var parent=store.task(id).orElseThrow();
+        if(parent.status()!=TaskStatus.COMPLETED||parent.invalidation()!=null||!parent.spec().outputContract().equals("report"))throw new IllegalStateException("前置报告不可用；业务事实应通过输入契约绑定");
+        return Map.of("taskId",parent.id(),"revision",parent.revision(),"scope","UNVERIFIED_REPORT","text",parent.reply());
+    }
     public String question(){return question;}
     public String finalAnswer(){return finalAnswer;}
     public synchronized void requestInput(String text){businessActive();if(text==null||text.isBlank()||text.length()>2000)throw new IllegalArgumentException("补问无效");question=text;}

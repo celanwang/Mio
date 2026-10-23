@@ -35,7 +35,7 @@ public final class GoalProgramExecutor {
     }
     private TaskRecord executeStep(String session,GoalProgram p,GoalProgram.Step step,Map<String,TaskRecord> completed,RunBudget budget){
         budget.active();var task=runtime.list(session).stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
-        if(task==null)task=runtime.submit(session,p.task(step,step.dependencies().stream().map(id->completed.get(id).id()).toList()),budget).block(Duration.ofMillis(limits.millis()));
+        if(task==null)task=runtime.submit(session,p.task(step,completed),budget).block(Duration.ofMillis(limits.millis()));
         if(task.status()==TaskStatus.QUEUED)task=runtime.runQueuedTask(session,task.id(),budget).block(Duration.ofMillis(limits.millis()));
         else if(task.status()==TaskStatus.INPUT_READY)task=runtime.continueTask(session,task.id(),budget).block(Duration.ofMillis(limits.millis()));return task;
     }

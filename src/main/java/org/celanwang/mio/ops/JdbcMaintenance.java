@@ -20,6 +20,8 @@ public final class JdbcMaintenance {
     public record Plan(int schemaVersion, Operation operation, String target, String digest, Map<String,Long> affected) {}
     private static final List<String> TABLES = List.of("execution_leases", "goals", "tasks", "task_queue",
             "goal_budgets", "budget_calls", "memory_jobs", "memory_usage_days", "memory_usage_calls", "operation_claims");
+    private static final List<String> OPTIONAL_TABLES=List.of("goal_programs","goal_proposals","goal_wakeups","goal_resources","resource_observations","workspace_documents");
+    private List<String> tables(){var result=new ArrayList<>(TABLES);for(String table:OPTIONAL_TABLES)if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass(?) IS NOT NULL",Boolean.class,table)))result.add(table);return result;}
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
@@ -50,7 +52,7 @@ public final class JdbcMaintenance {
         return tx.execute(status -> {
             jdbc.execute("SET LOCAL lock_timeout = '5s'");
             // Blocks writes and row-locking readers while fencing the restored identities. Live apps must be stopped.
-            jdbc.execute("LOCK TABLE "+String.join(",",TABLES)+",events IN ACCESS EXCLUSIVE MODE");
+            jdbc.execute("LOCK TABLE "+String.join(",",tables())+",events IN ACCESS EXCLUSIVE MODE");
             Plan current=plan(operation,target);
             if(!current.digest().equals(expectedDigest)) throw new IllegalStateException("数据库状态已改变，请重新预览");
             long now=jdbc.queryForObject("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint",Long.class);
@@ -88,7 +90,7 @@ public final class JdbcMaintenance {
             add(digest,"maintenance-v1"); add(digest,operation.name()); add(digest,target);
             add(digest,jdbc.execute((ConnectionCallback<String>) connection -> connection.getMetaData().getURL()));
             add(digest,jdbc.queryForObject("SELECT current_database()||':'||current_schema()||':'||current_user",String.class));
-            for(String table:TABLES) {
+            for(String table:tables()) {
                 add(digest,table);
                 jdbc.query(connection -> {
                     var statement=connection.prepareStatement("SELECT to_jsonb(t)::text FROM "+table+" t ORDER BY to_jsonb(t)::text");
@@ -101,6 +103,8 @@ public final class JdbcMaintenance {
     }
 
     private void recover(long now) {
+        if(tables().contains("goal_wakeups"))jdbc.update("UPDATE goal_wakeups SET state='FAILED',owner=NULL,lease_until=0,error_code='RESTORE_STOPPED' WHERE state IN ('READY','RUNNING')");
+        if(tables().contains("goal_programs"))jdbc.update("UPDATE goal_programs SET revision=revision+1,content=jsonb_set(jsonb_set(content::jsonb,'{policy,enabled}','false'::jsonb),'{revision}',to_jsonb(revision+1))::text WHERE (content::jsonb->'policy'->>'enabled')::boolean=true");
         // Pause goals without touching user intent, acceptance conditions, receipts or account claims.
         for(String session:jdbc.query("SELECT session_id FROM goals ORDER BY id",(rs,n)->rs.getString(1))) {
             var goal=store.goal(session).orElseThrow();

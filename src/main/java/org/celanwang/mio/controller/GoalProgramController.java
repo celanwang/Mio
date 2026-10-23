@@ -9,6 +9,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/goals")
+@CrossOrigin(origins={"http://localhost:63342","http://127.0.0.1:63342"})
 @ConditionalOnProperty(prefix="app.multi-agent",name="enabled",havingValue="true")
 public class GoalProgramController {
     private final JdbcGoalPrograms programs;private final AgentRegistry registry;private final JdbcGoalWakeups wakeups;private final GoalProgramExecutor executor;

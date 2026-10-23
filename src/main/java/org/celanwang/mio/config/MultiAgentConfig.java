@@ -63,10 +63,16 @@ public class MultiAgentConfig {
         });
         return new DomainDefinition(domain.capability(),domain.prompt(),domain.tools(),service::availability);
     }
-    @Bean AgentRegistry agentRegistry(List<DomainDefinition> definitions){
+    @Bean org.celanwang.mio.goals.CapabilityPackages capabilityPackages(org.celanwang.mio.goals.JdbcDocuments documents,ObjectMapper json,org.springframework.core.env.Environment env,@Value("${app.agent.packages-dir:./agent-packages}")String directory,@Value("${app.agent.skills-dir:./skills}")String skills){return new org.celanwang.mio.goals.CapabilityPackages(Path.of(directory),Path.of(skills),documents,json,env::getProperty);}
+    @Bean AgentRegistry agentRegistry(List<DomainDefinition> builtins,org.celanwang.mio.goals.CapabilityPackages packages){
+        var definitions=packages.combine(builtins);
         var probes=new LinkedHashMap<String,java.util.function.Supplier<CapabilityAvailability>>();definitions.forEach(d->probes.put(d.capability().id(),d::checkAvailability));
         return new AgentRegistry(definitions.stream().map(DomainDefinition::capability).toList(),probes);
     }
+    @Bean org.celanwang.mio.goals.JdbcDocuments workspaceDocuments(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store){return new org.celanwang.mio.goals.JdbcDocuments(jdbc,source,store);}
+    @Bean @Order(Ordered.HIGHEST_PRECEDENCE+3) ApplicationRunner workspaceDocumentSchema(org.celanwang.mio.goals.JdbcDocuments documents){return args->documents.initialize();}
+    @Bean DomainDefinition researchDomain(org.celanwang.mio.goals.JdbcDocuments documents,ObjectMapper json,@Value("${app.agent.skills-dir:./skills}")String dir,@Value("${app.research.search-key:}")String key){return definition("research-assistant","信息研究助手","查询本地文档和配置的公开网页搜索，比较资料并交付带来源报告。",dir,()->List.of(new org.celanwang.mio.goals.DocumentReadTool(documents,true),new org.celanwang.mio.goals.DocumentReadTool(documents,false),new org.celanwang.mio.goals.WebSearchTool(key,json)));}
+    @Bean DomainDefinition documentDomain(org.celanwang.mio.goals.JdbcDocuments documents,@Value("${app.agent.skills-dir:./skills}")String dir){return definition("document-assistant","文档助手","阅读、摘要、比较和改写用户导入文档，在任务回复交付文稿。",dir,()->List.of(new org.celanwang.mio.goals.DocumentReadTool(documents,true),new org.celanwang.mio.goals.DocumentReadTool(documents,false)));}
     @Bean JdbcCoordinationStore coordinationStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcCoordinationStore(jdbc,source,json);}
     @Bean JdbcAgentStateStore coordinationAgentStateStore(JdbcTemplate jdbc,ObjectMapper json){return new JdbcAgentStateStore(jdbc,json);}
     @Bean JdbcExecutionLeaseStore executionLeaseStore(JdbcTemplate jdbc,DataSource source){return new JdbcExecutionLeaseStore(jdbc,source);}
@@ -90,11 +96,11 @@ public class MultiAgentConfig {
     @Bean JdbcGoalAcceptance goalAcceptance(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,AgentRegistry registry,ObjectMapper json){return new JdbcGoalAcceptance(jdbc,source,store,registry,json,Clock.systemUTC());}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
     ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue,JdbcGoalAcceptance acceptance){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();acceptance.initialize();};}
-    @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> definitions,@Qualifier("dashScopePlusModel")Model model,
+    @Bean DomainAgentFactory domainAgentFactory(List<DomainDefinition> builtins,org.celanwang.mio.goals.CapabilityPackages packages,@Qualifier("dashScopePlusModel")Model model,
             JdbcAgentStateStore states,AgentSkillRepository skills,PolicyEngine policy,WeiboMcpService weibo,ObjectProvider<JevClient> jev,
             @Value("${app.jev.auto-approve-threshold:0.8}")double threshold,TraceStore traces,TrustStore trust,MioLongTermMemory memory,
             HabitDetector habits,ProfileStore profiles,ObjectMapper json){
-        return new DomainAgentFactory(definitions,c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json);
+        return new DomainAgentFactory(packages.combine(builtins),c->model,states,skills,policy,weibo,jev,threshold,traces,trust,memory,habits,profiles,json);
     }
     @Bean FactExtractor tencentQuoteFactExtractor(){return new TencentQuoteFactExtractor();}
     @Bean OperationVerifier tencentOrderReceiptVerifier(){return new TencentOrderReceiptVerifier();}

@@ -1,0 +1,8 @@
+{
+  "id": "research-review",
+  "name": "资料复核助手",
+  "description": "基于用户导入文档复核结论和引用，输出独立意见。",
+  "kind": "LOCAL_DOCUMENTS",
+  "prompt": "先读取相关文档，检查报告中的事实依据、遗漏和不确定性，准确引用文档编号与版本。",
+  "enabled": false
+}
