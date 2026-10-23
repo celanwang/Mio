@@ -189,6 +189,7 @@ aside{width:264px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:
     <div id="profile"></div>
   </div>
 </main>
+<script src="memory-jobs-panel.js"></script>
 <script>
 let activeSession = null;
 let view = 'timeline';
@@ -290,13 +291,15 @@ async function profileJson(url) {
 
 async function loadProfile() {
   const box = document.getElementById('profile');
-  const [entries, rules, automations, entities] = await Promise.all([
+  const [entries, rules, automations, entities, memoryJobs] = await Promise.all([
     profileJson('/api/profile'),
     profileJson('/api/trust'),
     profileJson('/api/automations'),
-    profileJson('/api/entities')
+    profileJson('/api/entities'),
+    profileJson('/api/memory/jobs').catch(()=>null)
   ]);
   let html = '<h2>用户画像（Wiki 页）</h2>';
+  html=mioMemoryJobsHtml(memoryJobs,escapeHtml)+html;
   if (!entries.length) {
     html += '<div class="empty" style="margin-top:20px">暂无画像页面</div>';
   } else {
