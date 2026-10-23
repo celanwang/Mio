@@ -48,6 +48,11 @@ class AcceptanceTest(unittest.TestCase):
         write(self.directory / 'promotion.json', {'status': 'ready_for_human_review'})
         self.assertIn('fixture_not_qualified', assess(self.root, self.directory)['failed_checks'])
 
+    def test_capability_package_changes_are_part_of_the_source_fingerprint(self):
+        (self.root / 'agent-packages').mkdir()
+        (self.root / 'agent-packages/research.json').write_text('{"enabled": true}')
+        self.assertIn('source_unchanged', assess(self.root, self.directory)['failed_checks'])
+
     def test_begin_invalidates_the_previous_success_artifact(self):
         write(self.directory / 'acceptance.json', {'status': 'OFFLINE_COMPLETE'})
         with contextlib.redirect_stdout(io.StringIO()): begin(self.root, self.directory)

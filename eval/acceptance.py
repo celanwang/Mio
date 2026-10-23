@@ -16,7 +16,7 @@ PG_SUITES = ('JdbcPostgresIntegrationTest', 'JdbcTaskQueueIntegrationTest', 'Jdb
 
 
 def fingerprint(root):
-    files = [p for folder in ('src', 'scripts', 'eval', 'skills') for p in (root / folder).rglob('*')
+    files = [p for folder in ('src', 'scripts', 'eval', 'skills', 'agent-packages') for p in (root / folder).rglob('*')
              if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc' and p.name != '.DS_Store'] + [root / 'pom.xml']
     digest = hashlib.sha256()
     for path in sorted(files):

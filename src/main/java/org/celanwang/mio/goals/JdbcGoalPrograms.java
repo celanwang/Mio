@@ -42,13 +42,15 @@ public final class JdbcGoalPrograms {
             var contract=capability.outputContract(spec);for(var check:step.checks())check.validate(contract.fields().stream().filter(f->f.id().equals(check.fieldId())).findFirst().orElseThrow(()->new IllegalArgumentException("验收字段不存在")));
         }
         boolean expanded;do{expanded=false;for(var step:request.steps())if(!affected.contains(step.id())&&!Collections.disjoint(step.dependencies(),affected))expanded|=affected.add(step.id());}while(expanded);
-        var generations=new HashMap<String,Long>();for(var step:request.steps()){long old=previous==null?0:previous.generations().getOrDefault(step.id(),0L);generations.put(step.id(),old==0?1:affected.contains(step.id())?old+1:old);}
+        var generations=previous==null?new HashMap<String,Long>():new HashMap<>(previous.generations());
+        if(previous!=null)for(var old:previous.steps())if(request.steps().stream().noneMatch(s->s.id().equals(old.id())))generations.put(old.id(),previous.generations().get(old.id())+1);
+        for(var step:request.steps()){long old=previous==null?0:previous.generations().getOrDefault(step.id(),0L);generations.put(step.id(),old==0?1:affected.contains(step.id())?old+1:old);}
         var next=new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);for(var step:next.steps())next.task(step,List.of());return next;
     }
     public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();build(goal,find(goal.id()).orElse(null),request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
     public GoalProgram refresh(String session,long expected,Set<String> roots){return tx.execute(status->{
         var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");var previous=find(goal.id()).orElseThrow();if(previous.revision()!=expected)throw new IllegalStateException("计划已更新，请刷新");
-        var affected=new HashSet<>(roots);if(affected.isEmpty()||!previous.generations().keySet().containsAll(affected))throw new IllegalArgumentException("请选择现有步骤");
+        var affected=new HashSet<>(roots);if(affected.isEmpty()||!previous.steps().stream().map(GoalProgram.Step::id).collect(java.util.stream.Collectors.toSet()).containsAll(affected))throw new IllegalArgumentException("请选择现有步骤");
         boolean expanded;do{expanded=false;for(var step:previous.steps())if(!affected.contains(step.id())&&!Collections.disjoint(step.dependencies(),affected))expanded|=affected.add(step.id());}while(expanded);
         var keys=previous.steps().stream().filter(s->affected.contains(s.id())).map(previous::taskKey).collect(java.util.stream.Collectors.toSet());
         for(var task:store.tasks(session))if(keys.contains(task.spec().key())&&task.invalidation()==null){if(task.status()==TaskStatus.RUNNING)throw new IllegalStateException("步骤仍在运行");store.saveTask(task,task.invalidate(new TaskInvalidation(TaskInvalidation.Code.FACT_CHANGED,task.id(),task.id(),"","refresh",System.currentTimeMillis()),System.currentTimeMillis()),"program_step_refreshed");}
