@@ -14,7 +14,7 @@ import java.util.*;
 public class GoalProgramController {
     private final JdbcGoalPrograms programs;private final AgentRegistry registry;private final JdbcGoalWakeups wakeups;private final GoalProgramExecutor executor;
     public GoalProgramController(JdbcGoalPrograms programs,AgentRegistry registry,JdbcGoalWakeups wakeups,GoalProgramExecutor executor){this.programs=programs;this.registry=registry;this.wakeups=wakeups;this.executor=executor;}
-    @GetMapping("/{session}/program") public Map<String,Object> view(@PathVariable String session){var result=programs.view(session);result.put("capabilities",registry.discover());return result;}
+    @GetMapping("/{session}/program") public Map<String,Object> view(@PathVariable String session){var result=programs.view(session);result.put("capabilities",registry.discover());result.put("evidenceHash",programs.evidenceHash(session,(GoalProgram)result.get("program")));return result;}
     @PutMapping("/{session}/program") public GoalProgram save(@PathVariable String session,@RequestBody GoalProgram.Request request){return programs.save(session,request);}
     @PostMapping("/{session}/program/preview") public Map<String,Object> preview(@PathVariable String session,@RequestBody GoalProgram.Request request){return programs.preview(session,request);}
     public record WakeRequest(String requestId){}
