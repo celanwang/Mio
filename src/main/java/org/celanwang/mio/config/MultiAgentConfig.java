@@ -73,6 +73,7 @@ public class MultiAgentConfig {
     @Bean JdbcTaskQueue taskQueue(JdbcTemplate jdbc,DataSource source,ObjectMapper json,JdbcCoordinationStore store,JdbcExecutionLeaseStore leases){return new JdbcTaskQueue(jdbc,source,json,store,leases);}
     @Bean GoalLifecycle goalLifecycle(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,JdbcTaskQueue queue){return new JdbcGoalLifecycle(jdbc,source,store,queue);}
     @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}
+    @Bean GoalUsageRecovery goalUsageRecovery(JdbcGoalBudgetStore budgets){return new GoalUsageRecovery(budgets);}
     @Bean JdbcGoalAcceptance goalAcceptance(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,AgentRegistry registry,ObjectMapper json){return new JdbcGoalAcceptance(jdbc,source,store,registry,json,Clock.systemUTC());}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
     ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue,JdbcGoalAcceptance acceptance){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();acceptance.initialize();};}

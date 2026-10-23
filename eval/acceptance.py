@@ -11,7 +11,8 @@ from eval.release import revision, matches
 
 PG_SUITES = ('JdbcPostgresIntegrationTest', 'JdbcTaskQueueIntegrationTest', 'JdbcGoalLifecycleIntegrationTest',
              'JdbcMemoryConsistencyIntegrationTest', 'JdbcOrchestrationAcceptanceTest', 'JdbcGoalAcceptanceIntegrationTest',
-             'JdbcMemoryJobsIntegrationTest', 'JdbcMemoryUsageIntegrationTest', 'JdbcMaintenanceIntegrationTest')
+             'JdbcMemoryJobsIntegrationTest', 'JdbcMemoryUsageIntegrationTest', 'JdbcMaintenanceIntegrationTest',
+             'JdbcGoalUsageIntegrationTest')
 
 
 def fingerprint(root):

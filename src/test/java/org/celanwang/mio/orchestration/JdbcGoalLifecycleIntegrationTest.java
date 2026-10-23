@@ -90,6 +90,17 @@ class JdbcGoalLifecycleIntegrationTest {
         try{var jobs=List.of(GoalRecord.State.PAUSED,GoalRecord.State.CLOSED).stream().map(state->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);try{lifecycle.transition("root",0,state);winners.incrementAndGet();}catch(IllegalStateException stale){}return true;})).toList();for(var job:jobs)job.get(10,TimeUnit.SECONDS);}finally{pool.shutdownNow();}
         assertThat(winners.get()).isEqualTo(1);assertThat(store.goal("root").orElseThrow().controlRevision()).isEqualTo(1);assertThat(leases.valid(token)).isFalse();
     }
+    @Test void cancellingActualSdkForegroundRequestSettlesUnknownAndReleasesExecutionOwner()throws Exception{
+        var states=new JdbcAgentStateStore(jdbc,json);states.initialize();var model=mock(io.agentscope.core.model.Model.class);var entered=new CountDownLatch(1);
+        when(model.getModelName()).thenReturn("fake-model");when(model.stream(anyList(),any(),any())).thenAnswer(inv->Flux.defer(()->{entered.countDown();return Flux.never();}));
+        var request=new org.celanwang.mio.model.dto.ChatRequest();request.setSessionId("root");request.setMessage("start");
+        var pending=service(runtime(List.of()),model,states).chat(request).subscribe();assertThat(entered.await(3,TimeUnit.SECONDS)).isTrue();pending.dispose();
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+        while(System.nanoTime()<until&&budgets.find("g").orElseThrow().pendingUsage()!=0)Thread.sleep(10);
+        var usage=budgets.find("g").orElseThrow();assertThat(usage.models()).isEqualTo(1);assertThat(usage.pendingUsage()).isZero();assertThat(usage.unknownUsage()).isEqualTo(1);
+        var next=leases.acquire("root",30000);assertThat(leases.valid(next)).isTrue();leases.release(next);
+        assertThat(states.exists(null,"root:supervisor")).isFalse();assertThat(store.goal("root").orElseThrow().state()).isEqualTo(GoalRecord.State.ACTIVE);verify(model,times(1)).stream(anyList(),any(),any());
+    }
     private MultiAgentChatService service(TaskRuntime runtime,io.agentscope.core.model.Model model,JdbcAgentStateStore states){return new MultiAgentChatService(new SupervisorFactory(model,states,registry,runtime,json),runtime,registry,
             new RunBudget.Limits(20,20,20,10000,10000,20000),Clock.systemUTC(),new org.celanwang.mio.trace.TraceStore((s,e)->{}),null,null,budgets,new GoalBudgetStore.Limits(50,50,50,10000),leases);}
 }

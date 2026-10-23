@@ -17,8 +17,11 @@ final class InMemoryGoalBudgetStore implements GoalBudgetStore {
     public synchronized void settle(String id,String call,Long tokens,boolean complete){
         var entry=calls.get(call);if(entry==null||!entry[0].equals(id))throw new IllegalArgumentException("foreign call");
         String state=complete?"KNOWN":"UNKNOWN";
-        if(!entry[1].equals("PENDING")){if(entry[1].equals(state)&&Objects.equals(entry[2],tokens))return;throw new IllegalStateException("settled");}
-        var s=states.get(id);states.put(id,new Snapshot(id,s.limits(),s.models(),s.tools(),s.tasks(),s.knownTokens()+(tokens==null?0:tokens),s.pendingUsage()-1,s.unknownUsage()+(complete?0:1),s.revision()+1,s.historyUnknown()));
+        String previous=(String)entry[1];Long prior=(Long)entry[2];
+        if(!previous.equals("PENDING")){if(previous.equals(state)&&Objects.equals(prior,tokens))return;if(!previous.equals("UNKNOWN")||!complete)throw new IllegalStateException("settled");}
+        if(prior!=null&&(tokens==null||tokens<prior))throw new IllegalStateException("usage decreased");
+        int pending=previous.equals("PENDING")?1:0,unknown=previous.equals("PENDING")&&!complete?1:previous.equals("UNKNOWN")&&complete?-1:0;
+        var s=states.get(id);states.put(id,new Snapshot(id,s.limits(),s.models(),s.tools(),s.tasks(),s.knownTokens()+(tokens==null?0:tokens)-(prior==null?0:prior),s.pendingUsage()-pending,s.unknownUsage()+unknown,s.revision()+1,s.historyUnknown()));
         calls.put(call,new Object[]{id,state,tokens});
     }
 }

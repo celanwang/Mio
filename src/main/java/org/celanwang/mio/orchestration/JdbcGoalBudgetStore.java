@@ -10,11 +10,14 @@ import java.util.*;
 /** Lock, counter update and audit record commit together. No volatile production fallback. */
 public final class JdbcGoalBudgetStore implements GoalBudgetStore {
     private final JdbcTemplate jdbc;private final ObjectMapper json;private final TransactionTemplate tx;
-    public JdbcGoalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){this.jdbc=jdbc;this.json=json;tx=new TransactionTemplate(new DataSourceTransactionManager(source));}
+    public JdbcGoalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){this.jdbc=jdbc;this.json=json;tx=new TransactionTemplate(new DataSourceTransactionManager(source));tx.setTimeout(10);}
     public void initialize(){
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_budgets(goal_id TEXT PRIMARY KEY REFERENCES goals(id), content TEXT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS budget_calls(id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goal_budgets(goal_id), state TEXT NOT NULL, tokens BIGINT)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_budget_calls_goal ON budget_calls(goal_id)");
+        // Legacy pending rows have no provable live owner. Upgrade requires stopping old instances.
+        jdbc.execute("ALTER TABLE budget_calls ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT 0");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_budget_calls_pending ON budget_calls(expires_at,id) WHERE state='PENDING'");
     }
     private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalStateException("预算序列化失败",e);}}
     private Snapshot decode(String value,String goal){try{var s=json.readValue(value,Snapshot.class);if(!s.goalId().equals(goal))throw new IllegalArgumentException("目标标识不匹配");return s;}catch(Exception e){throw new IllegalStateException("目标预算损坏，已停止执行",e);}}
@@ -34,14 +37,21 @@ public final class JdbcGoalBudgetStore implements GoalBudgetStore {
                 "budget:"+eventId,System.currentTimeMillis(),type,type,encode(state),state.goalId());
     }
     @Override public String reserve(String goalId,Kind kind){
+        return reserve(goalId,kind,900000);
+    }
+    @Override public String reserveModel(String goalId,long timeoutMillis){
+        return reserve(goalId,Kind.MODEL,timeoutMillis);
+    }
+    private String reserve(String goalId,Kind kind,long timeoutMillis){
         Objects.requireNonNull(kind,"预算类型缺失");
+        if(timeoutMillis<1||timeoutMillis>900000)throw new IllegalArgumentException("模型用量预占截止时间必须在 1–900000 毫秒内");
         return tx.execute(status->{
             var s=lock(goalId);var l=s.limits();
             if(s.knownTokens()>=l.tokens()||kind==Kind.MODEL&&s.models()>=l.models()||kind==Kind.TOOL&&s.tools()>=l.tools()||kind==Kind.TASK&&s.tasks()>=l.tasks())
                 throw new RunBudget.BudgetExceeded("本目标累计"+(switch(kind){case MODEL->"模型调用";case TOOL->"工具调用";case TASK->"任务恢复";})+"或已报告 token 预算已耗尽，已停止新的执行");
             String call=UUID.randomUUID().toString();
             var next=new Snapshot(goalId,l,s.models()+(kind==Kind.MODEL?1:0),s.tools()+(kind==Kind.TOOL?1:0),s.tasks()+(kind==Kind.TASK?1:0),s.knownTokens(),s.pendingUsage()+(kind==Kind.MODEL?1:0),s.unknownUsage(),s.revision()+1,s.historyUnknown());
-            if(kind==Kind.MODEL)jdbc.update("INSERT INTO budget_calls(id,goal_id,state,tokens) VALUES (?,?,'PENDING',NULL)",call,goalId);
+            if(kind==Kind.MODEL)jdbc.update("INSERT INTO budget_calls(id,goal_id,state,tokens,expires_at) VALUES (?,?,'PENDING',NULL,floor(extract(epoch FROM clock_timestamp())*1000)::bigint+?)",call,goalId,timeoutMillis);
             save(next,call,"budget_reserved");return call;
         });
     }
@@ -51,14 +61,44 @@ public final class JdbcGoalBudgetStore implements GoalBudgetStore {
             var s=lock(goalId);
             var rows=jdbc.queryForList("SELECT state,tokens FROM budget_calls WHERE id=? AND goal_id=? FOR UPDATE",callId,goalId);
             if(rows.size()!=1)throw new IllegalArgumentException("模型预占不属于本目标");
-            var row=rows.get(0);String state=complete?"KNOWN":"UNKNOWN";
-            if(!"PENDING".equals(row.get("state"))){
-                if(state.equals(row.get("state"))&&Objects.equals(knownTokens,row.get("tokens")))return;
-                throw new IllegalStateException("已结算的模型用量不能覆盖");
-            }
-            long total=Math.addExact(s.knownTokens(),knownTokens==null?0:knownTokens);
-            jdbc.update("UPDATE budget_calls SET state=?,tokens=? WHERE id=?",state,knownTokens,callId);
-            save(new Snapshot(goalId,s.limits(),s.models(),s.tools(),s.tasks(),total,s.pendingUsage()-1,s.unknownUsage()+(complete?0:1),s.revision()+1,s.historyUnknown()),callId+":settled","budget_settled");
+            settleLocked(s,callId,rows.get(0),knownTokens,complete,"budget_settled");
         });
+    }
+    private void settleLocked(Snapshot s,String callId,Map<String,Object> row,Long tokens,boolean complete,String event){
+        String previous=(String)row.get("state"),state=complete?"KNOWN":"UNKNOWN";
+        Long prior=row.get("tokens")==null?null:((Number)row.get("tokens")).longValue();
+        if(!previous.equals("PENDING")){
+            if(previous.equals(state)&&Objects.equals(tokens,prior))return;
+            if(!previous.equals("UNKNOWN")||!complete)throw new IllegalStateException("已结算的模型用量不能覆盖");
+        }
+        if(prior!=null&&(tokens==null||tokens<prior))throw new IllegalStateException("已报告模型用量不能减少");
+        long delta=(tokens==null?0:tokens)-(prior==null?0:prior);
+        long total=Math.addExact(s.knownTokens(),delta);
+        int pending=previous.equals("PENDING")?1:0;
+        int unknown=previous.equals("PENDING")&&!complete?1:previous.equals("UNKNOWN")&&complete?-1:0;
+        jdbc.update("UPDATE budget_calls SET state=?,tokens=? WHERE id=?",state,tokens,callId);
+        save(new Snapshot(s.goalId(),s.limits(),s.models(),s.tools(),s.tasks(),total,s.pendingUsage()-pending,s.unknownUsage()+unknown,s.revision()+1,s.historyUnknown()),
+                callId+(previous.equals("UNKNOWN")?":usage_completed":":settled"),event);
+    }
+    /** Fixed-size batches; lock budget before call, like reserve/settle. No model or business work is retried. */
+    public int recoverExpired(int limit){
+        if(limit<1||limit>500)throw new IllegalArgumentException("用量恢复批次必须在 1–500 内");
+        var candidates=jdbc.queryForList("SELECT id,goal_id FROM budget_calls WHERE state='PENDING' AND expires_at<=floor(extract(epoch FROM clock_timestamp())*1000) ORDER BY expires_at,id LIMIT ?",limit);
+        int recovered=0;
+        for(var call:candidates){
+            Boolean changed=tx.execute(status->{
+                jdbc.execute("SET LOCAL lock_timeout='1s'");
+                var goals=jdbc.query("SELECT content FROM goal_budgets WHERE goal_id=? FOR UPDATE SKIP LOCKED",(rs,n)->decode(rs.getString(1),(String)call.get("goal_id")),call.get("goal_id"));
+                if(goals.isEmpty())return false;
+                var s=goals.get(0);
+                var rows=jdbc.queryForList("SELECT state,tokens FROM budget_calls WHERE id=? AND goal_id=? AND state='PENDING' AND expires_at<=floor(extract(epoch FROM clock_timestamp())*1000) FOR UPDATE",call.get("id"),call.get("goal_id"));
+                if(rows.isEmpty())return false;
+                Long prior=rows.get(0).get("tokens")==null?null:((Number)rows.get(0).get("tokens")).longValue();
+                settleLocked(s,(String)call.get("id"),rows.get(0),prior,false,"budget_usage_expired");
+                return true;
+            });
+            if(Boolean.TRUE.equals(changed))recovered++;
+        }
+        return recovered;
     }
 }

@@ -22,5 +22,8 @@ public interface GoalBudgetStore {
     Snapshot open(String goalId,Limits limits,boolean historyUnknown);
     Optional<Snapshot> find(String goalId);
     String reserve(String goalId,Kind kind);
+    /** Duration relative to the store's clock. Production persists a bounded recovery deadline before I/O. */
+    default String reserveModel(String goalId,long timeoutMillis){return reserve(goalId,Kind.MODEL);}
+    /** Internal correlated usage only: identical settlements are idempotent; UNKNOWN may gain complete, nondecreasing usage. */
     void settle(String goalId,String callId,Long knownTokens,boolean complete);
 }

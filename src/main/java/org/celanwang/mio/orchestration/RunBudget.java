@@ -53,7 +53,8 @@ public final class RunBudget {
     public ModelCall beginModel(int contextChars) {
         if(contextChars<0||contextChars>limits.contextCharacters())throw new BudgetExceeded("模型上下文预算超限");
         active();models.updateAndGet(value->{if(value>=limits.modelCalls())throw new BudgetExceeded("本轮模型调用预算已耗尽");return value+1;});
-        String id=ledger==null?null:ledger.reserve(goalId,GoalBudgetStore.Kind.MODEL);
+        long remaining=Math.max(1,Math.min(895000,deadline-clock.millis()));
+        String id=ledger==null?null:ledger.reserveModel(goalId,remaining+5000);
         pending.incrementAndGet();return new ModelCall(id);
     }
     /** Review services do not expose usage; reserve and explicitly settle as unknown. */

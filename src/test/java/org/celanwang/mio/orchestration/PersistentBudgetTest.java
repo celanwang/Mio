@@ -23,10 +23,31 @@ class PersistentBudgetTest {
         assertThatThrownBy(()->new BudgetedModel(model,run(999,999)).stream(List.of(new UserMessage("second")),null,null).blockLast()).isInstanceOf(RunBudget.BudgetExceeded.class);
         verify(model,times(1)).stream(anyList(),any(),any());var s=store.find("goal").orElseThrow();assertThat(s.knownTokens()).isEqualTo(8);assertThat(s.usageComplete()).isTrue();
     }
-    @Test void missingUsageAndCancellationRemainVisibleAcrossRequests(){
+    @Test void missingUsageAndCancellationSettleUnknownWithoutRefundingCalls() throws Exception {
         new BudgetedModel(source(Flux.just(ChatResponse.builder().content(List.of()).build())),run(5,100)).stream(List.of(),null,null).blockLast();
         var subscription=new BudgetedModel(source(Flux.never()),run(5,100)).stream(List.of(),null,null).subscribe();subscription.dispose();
-        var s=store.find("goal").orElseThrow();assertThat(s.models()).isEqualTo(2);assertThat(s.unknownUsage()).isEqualTo(1);assertThat(s.pendingUsage()).isEqualTo(1);assertThat(s.usageComplete()).isFalse();
+        awaitUnknown(2);
+        var s=store.find("goal").orElseThrow();assertThat(s.models()).isEqualTo(2);assertThat(s.unknownUsage()).isEqualTo(2);assertThat(s.pendingUsage()).isZero();assertThat(s.usageComplete()).isFalse();
+    }
+    @Test void cancellationPreservesObservedPartialUsageWithoutExposingToolCalls() throws Exception {
+        var observed=new java.util.concurrent.CountDownLatch(1);var outputs=new java.util.concurrent.atomic.AtomicInteger();
+        var model=source(Flux.create(sink->{sink.next(usage(5,2));observed.countDown();}));
+        var subscription=new BudgetedModel(model,run(5,100)).stream(List.of(),null,null).subscribe(value->outputs.incrementAndGet());
+        assertThat(observed.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();subscription.dispose();awaitUnknown(1);
+        var s=store.find("goal").orElseThrow();assertThat(s.knownTokens()).isEqualTo(7);assertThat(s.models()).isEqualTo(1);assertThat(s.pendingUsage()).isZero();assertThat(outputs.get()).isZero();
+    }
+    @Test void reservationDelayCannotStartANetworkCallAfterTheRunDeadline(){
+        var now=new java.util.concurrent.atomic.AtomicLong();var clock=mock(Clock.class);when(clock.millis()).thenAnswer(inv->now.get());
+        var ledger=spy(store);doAnswer(inv->{var id=inv.callRealMethod();now.set(20000);return id;}).when(ledger).reserveModel(anyString(),anyLong());
+        var budget=new RunBudget(new RunBudget.Limits(10,10,10,1000,10000,10000),clock);budget.bind(ledger,"goal",new GoalBudgetStore.Limits(5,10,10,1000));
+        var model=mock(Model.class);
+        assertThatThrownBy(()->new BudgetedModel(model,budget).stream(List.of(),null,null).blockLast()).isInstanceOf(RunBudget.BudgetExceeded.class);
+        verifyNoInteractions(model);assertThat(store.find("goal").orElseThrow().pendingUsage()).isZero();assertThat(store.find("goal").orElseThrow().unknownUsage()).isEqualTo(1);
+    }
+    private void awaitUnknown(int count) throws Exception {
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        while(System.nanoTime()<deadline&&store.find("goal").orElseThrow().unknownUsage()!=count) Thread.sleep(10);
+        assertThat(store.find("goal").orElseThrow().unknownUsage()).isEqualTo(count);
     }
     @Test void partialStreamFailureChargesObservedUsageWithoutClaimingCompleteness(){
         var model=source(Flux.concat(Flux.just(usage(5,2)),Flux.error(new IllegalStateException("network"))));
