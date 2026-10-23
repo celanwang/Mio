@@ -57,13 +57,13 @@ public final class GoalProgramExecutor {
     }
     public Map<String,Object> status(String session){return status(session,null);}
     public Map<String,Object> status(String session,List<TaskRecord> selected){
-        var view=programs.view(session);var p=(GoalProgram)view.get("program");if(p==null)return Map.of("steps",List.of());var tasks=selected==null?tasks(session,p):selected;var steps=new ArrayList<Map<String,Object>>();
+        var goal=runtime.goal(session);var p=programs.find(goal.id()).orElse(null);if(p==null)return Map.of("steps",List.of());var tasks=selected==null?tasks(session,p):selected;var steps=new ArrayList<Map<String,Object>>();
         for(var step:p.steps()){
             var task=tasks.stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
-            var state=task==null?"WAITING":task.status().name();if(task!=null&&task.status()==TaskStatus.COMPLETED)state=ready(step,task)?task.spec().outputContract().equals("report")?"REPORT_READY":"VERIFIED":"EVIDENCE_OR_CONDITION_MISSING";if(p.goalRevision()!=runtime.goal(session).revision())state="GOAL_CHANGED";var result=new LinkedHashMap<String,Object>();result.put("id",step.id());result.put("state",state);result.put("reply",task==null?"":task.reply());result.put("taskId",task==null?"":task.id());
+            var state=task==null?"WAITING":task.status().name();if(task!=null&&task.status()==TaskStatus.COMPLETED)state=ready(step,task)?task.spec().outputContract().equals("report")?"REPORT_READY":"VERIFIED":"EVIDENCE_OR_CONDITION_MISSING";if(p.goalRevision()!=goal.revision())state="GOAL_CHANGED";var result=new LinkedHashMap<String,Object>();result.put("id",step.id());result.put("state",state);result.put("reply",task==null?"":task.reply());result.put("taskId",task==null?"":task.id());
             if(task!=null)result.put("assessment",TaskResultAssessment.current(task,registry,System.currentTimeMillis()));steps.add(result);
         }
-        var rows=(List<?>)view.get("runtime");return Map.of("steps",steps,"runtime",rows.isEmpty()?Map.of():rows.get(0),"wakeups",wakeups.recent(p.goalId()),"programRevision",p.revision());
+        return Map.of("steps",steps,"runtime",programs.counters(goal.id()),"wakeups",wakeups.recent(p.goalId()),"programRevision",p.revision());
     }
     public List<Map<String,Object>> compare(String session,String fieldId,boolean descending){
         var goal=runtime.goal(session);var p=programs.find(goal.id()).orElseThrow();if(p.goalRevision()!=goal.revision())throw new IllegalStateException("用户目标已改变，请重新确认计划");var tasks=tasks(session,p);var result=new ArrayList<Map<String,Object>>();

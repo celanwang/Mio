@@ -11,6 +11,7 @@ spring:
 app:
   research:
     search-key: ${MIO_RESEARCH_SEARCH_KEY:}
+    allowed-hosts: ${MIO_RESEARCH_ALLOWED_HOSTS:}
   multi-agent:
     # 受控预览：关闭时沿用原入口；开启后协作关键状态要求 PostgreSQL 可用。
     enabled: ${MIO_MULTI_AGENT_ENABLED:false}

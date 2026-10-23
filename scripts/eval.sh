@@ -10,6 +10,7 @@ node --check src/main/resources/static/goals.js
 node --check src/main/resources/static/workbench.js
 node --check src/main/resources/static/continuity.js
 node --check src/main/resources/static/platform.js
+node --check src/main/resources/static/decisions.js
 python3 -m eval.acceptance python
 python3 -m eval.runner report --runs target/evaluation/fixture-runs.jsonl --output target/evaluation/report.json
 python3 -m eval.runner injections --runs target/evaluation/injection-fixtures.jsonl --output target/evaluation/injection-report.json

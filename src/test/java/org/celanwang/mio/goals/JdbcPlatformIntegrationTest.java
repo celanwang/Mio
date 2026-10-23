@@ -18,7 +18,7 @@ class JdbcPlatformIntegrationTest {
     @BeforeEach void init(){String url=System.getenv("MIO_TEST_PG_URL"),user=System.getenv().getOrDefault("MIO_TEST_PG_USERNAME","postgres"),password=System.getenv().getOrDefault("MIO_TEST_PG_PASSWORD","");admin=new JdbcTemplate(new DriverManagerDataSource(url,user,password));schema="mio_platform_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE SCHEMA "+schema);source=new DriverManagerDataSource(url+(url.contains("?")?"&":"?")+"currentSchema="+schema+",public",user,password);jdbc=new JdbcTemplate(source);new SchemaMigrations(jdbc,source).migrate();store=new JdbcCoordinationStore(jdbc,source,json);store.createGoal(new GoalRecord("g","s",1,"original","original",1,1));}
     @AfterEach void close(){if(admin!=null)admin.execute("DROP SCHEMA "+schema+" CASCADE");}
     @Test void unifiedMigrationsAreRepeatableAndContextRenewalRetainsUsageAndOriginals(){
-        new SchemaMigrations(jdbc,source).migrate();assertThat(jdbc.queryForObject("SELECT count(*) FROM schema_migrations",Long.class)).isEqualTo(4);
+        new SchemaMigrations(jdbc,source).migrate();assertThat(jdbc.queryForObject("SELECT count(*) FROM schema_migrations",Long.class)).isEqualTo(5);
         var budgets=new JdbcGoalBudgetStore(jdbc,source,json);budgets.open("g",new GoalBudgetStore.Limits(20,20,20,100));String call=budgets.reserve("g",GoalBudgetStore.Kind.MODEL);budgets.settle("g",call,3L,true);var before=budgets.find("g").orElseThrow();
         var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));var programs=new JdbcGoalPrograms(jdbc,source,json,store,registry);
         programs.save("s",new GoalProgram.Request(0,1,Map.of(),List.of(),new GoalProgram.Policy(false,System.currentTimeMillis()+100000,5,60,1,Set.of("domain"))));var continuity=new GoalContinuity(jdbc,source,store,programs,new JdbcExecutionLeaseStore(jdbc,source),json);
@@ -69,5 +69,23 @@ class JdbcPlatformIntegrationTest {
         comparisons.compare("s",request);assertThat(comparisons.recent("s").get(0)).containsEntry("current",true);
         programs.save("s",new GoalProgram.Request(1,1,Map.of(),List.of(step),policy));assertThat(comparisons.recent("s").get(0)).containsEntry("current",false);
         assertThatThrownBy(()->comparisons.compare("s",request)).hasMessageContaining("已改变");
+    }
+    @Test void synthesisUsesTheExactSnapshotAndCannotChangeAcceptanceOrOldDeliveries(){
+        var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));var programs=new JdbcGoalPrograms(jdbc,source,json,store,registry);
+        var step=new GoalProgram.Step("research","domain","research",List.of(),List.of(),"report",List.of());var program=programs.save("s",new GoalProgram.Request(0,1,Map.of(),List.of(step),new GoalProgram.Policy(false,System.currentTimeMillis()+60000,5,60,1,Set.of("domain"))));
+        var task=new TaskRecord("report","s","g",1,program.task(step,List.of()),"child","v1",TaskStatus.COMPLETED,"source report",null,List.of(),false,List.of(),0,1,1);store.createTask(task);
+        var runtime=new TaskRuntime(store,registry,(t,g,input,execution)->reactor.core.publisher.Mono.error(new AssertionError("no task execution")),new org.celanwang.mio.security.PolicyEngine("shadow"),java.time.Clock.systemUTC(),16);
+        var leases=new JdbcExecutionLeaseStore(jdbc,source);var budgets=new JdbcGoalBudgetStore(jdbc,source,json);var wakeups=new JdbcGoalWakeups(jdbc,source,programs,store);
+        var executor=new GoalProgramExecutor(programs,wakeups,runtime,leases,budgets,registry,new RunBudget.Limits(5,5,5,1000,100000,10000),new GoalBudgetStore.Limits(20,20,20,10000));var resources=new JdbcBusinessResources(jdbc,source,store,json);var syntheses=new GoalSyntheses(jdbc,json);
+        var workspace=new GoalWorkspace(jdbc,source,programs,executor,runtime,resources,leases,json).withDecisions(new GoalComparisons(jdbc,programs,runtime,registry,json),syntheses);
+        var before=workspace.snapshot("s");var delivery=workspace.deliver("s");String report="{\"summary\":\"有来源的综合\",\"findings\":[{\"text\":\"资料中提到的结论\",\"stepIds\":[\"research\"]}],\"tradeoffs\":[\"有待核对\"],\"gaps\":[\"报告不是业务证据\"],\"nextSteps\":[\"审阅原文\"]}";
+        var model=mock(io.agentscope.core.model.Model.class);
+        when(model.stream(anyList(),any(),any())).thenReturn(reactor.core.publisher.Flux.just(io.agentscope.core.model.ChatResponse.builder().content(List.of(io.agentscope.core.message.TextBlock.builder().text(report).build())).usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(2).outputTokens(1).build()).build()));
+        var generator=new GoalSynthesisGenerator(model,workspace,syntheses,runtime,leases,budgets,json,new RunBudget.Limits(1,1,1,12000,100000,40000),new GoalBudgetStore.Limits(20,20,20,10000));generator.generate("s",(String)before.get("decisionHash")).block();
+        var after=workspace.snapshot("s");assertThat(after).containsEntry("ready",true).containsEntry("decisionHash",before.get("decisionHash"));assertThat(after.get("sourceHash")).isNotEqualTo(before.get("sourceHash"));assertThat(store.task("report").orElseThrow()).isEqualTo(task);
+        assertThatThrownBy(()->workspace.acknowledge("s",(String)delivery.get("id"),1)).hasMessageContaining("过期");var next=workspace.deliver("s");assertThat(next.get("version")).isEqualTo(2L);assertThat(workspace.delivery("s",(String)next.get("id")).get("content").toString()).contains("有来源的综合","尚未证明","步骤：").doesNotContain("\"capabilityId\"");
+        doAnswer(call->{store.saveTask(task,task.invalidate(new TaskInvalidation(TaskInvalidation.Code.FACT_CHANGED,task.id(),task.id(),"","changed",System.currentTimeMillis()),System.currentTimeMillis()),"changed");return reactor.core.publisher.Flux.just(io.agentscope.core.model.ChatResponse.builder().content(List.of(io.agentscope.core.message.TextBlock.builder().text(report).build())).usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(2).outputTokens(1).build()).build());}).when(model).stream(anyList(),any(),any());
+        assertThatThrownBy(()->generator.generate("s",(String)after.get("decisionHash")).block()).hasMessageContaining("证据已变化");assertThat(workspace.snapshot("s").get("synthesis")).isNull();
+        assertThatThrownBy(()->new GoalSyntheses.Report("summary",List.of(new GoalSyntheses.Finding("unsupported",List.of("invented"))),List.of(),List.of(),List.of()).validate(Set.of("research"))).hasMessageContaining("不存在");
     }
 }

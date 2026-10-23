@@ -15,6 +15,7 @@ public final class JdbcGoalPrograms {
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_programs(goal_id TEXT PRIMARY KEY REFERENCES goals(id),revision BIGINT NOT NULL,content TEXT NOT NULL,activations INTEGER NOT NULL DEFAULT 0,next_at BIGINT NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '')");
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_proposals(goal_id TEXT PRIMARY KEY REFERENCES goals(id),content TEXT NOT NULL,created_at BIGINT NOT NULL)");
     }
+    public Map<String,Object> counters(String goal){var rows=jdbc.queryForList("SELECT activations,next_at,last_error FROM goal_programs WHERE goal_id=?",goal);return rows.isEmpty()?Map.of():rows.get(0);}
     public Optional<GoalProgram> find(String goal){return jdbc.query("SELECT content FROM goal_programs WHERE goal_id=?",(r,n)->decode(r.getString(1),GoalProgram.class),goal).stream().findFirst();}
     public Map<String,Object> view(String session){var goal=store.goal(session).orElseThrow(()->new IllegalArgumentException("请先创建对话目标"));var result=new LinkedHashMap<String,Object>();result.put("goal",goal);result.put("program",find(goal.id()).orElse(null));var proposal=jdbc.query("SELECT content FROM goal_proposals WHERE goal_id=?",(r,n)->decode(r.getString(1),GoalProgram.Request.class),goal.id()).stream().findFirst().orElse(null);result.put("proposal",proposal);if(proposal!=null)try{result.put("proposalReview",preview(session,proposal));}catch(IllegalStateException|IllegalArgumentException stale){result.put("proposalReview",Map.of("stale",true,"message",stale.getMessage()));}result.put("runtime",jdbc.queryForList("SELECT activations,next_at,last_error FROM goal_programs WHERE goal_id=?",goal.id()));return result;}
     public GoalProgram save(String session,GoalProgram.Request request){return tx.execute(status->{
@@ -47,7 +48,15 @@ public final class JdbcGoalPrograms {
         for(var step:request.steps()){long old=previous==null?0:previous.generations().getOrDefault(step.id(),0L);generations.put(step.id(),old==0?1:affected.contains(step.id())?old+1:old);}
         var next=new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);for(var step:next.steps())next.task(step,List.of());return next;
     }
-    public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();var current=find(goal.id()).orElse(null);checkBase(goal,current,request);build(goal,current,request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
+    public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();var current=find(goal.id()).orElse(null);checkBase(goal,current,request);build(goal,current,request);protectConfirmedConditions(goal,current,request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
+    private void protectConfirmedConditions(GoalRecord goal,GoalProgram current,GoalProgram.Request request){
+        if(current==null||current.goalRevision()!=goal.revision())return;
+        current.fields().forEach((key,value)->{if(!Objects.equals(value.value(),request.fields().get(key)))throw new IllegalArgumentException("模型建议不能改写或移除已确认目标字段，请由用户编辑");});
+        for(var old:current.steps())if(!old.checks().isEmpty()){
+            var next=request.steps().stream().filter(s->s.id().equals(old.id())).findFirst().orElse(null);
+            if(next==null||!next.checks().containsAll(old.checks()))throw new IllegalArgumentException("模型建议不能移除已确认验收条件，请由用户编辑");
+        }
+    }
     private void checkBase(GoalRecord goal,GoalProgram current,GoalProgram.Request request){
         if(goal.revision()!=request.expectedGoalRevision()||(current==null?0:current.revision())!=request.expectedRevision())throw new IllegalStateException("计划或用户目标已改变，请重新生成建议");
         if(request.evidenceHash()!=null&&!request.evidenceHash().equals(evidenceHash(goal.sessionId(),current)))throw new IllegalStateException("执行证据或资源已改变，请重新生成建议");
