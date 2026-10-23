@@ -34,6 +34,7 @@ class JdbcOrchestrationAcceptanceTest {
     ProfileStore profiles;MioLongTermMemory memory;TraceStore traces;AgentRegistry registry;TaskRuntime runtime;MultiAgentChatService chat;JdbcGoalAcceptance acceptance;
     final AtomicInteger rootCalls=new AtomicInteger(),quoteCalls=new AtomicInteger(),actionCalls=new AtomicInteger(),reads=new AtomicInteger(),writes=new AtomicInteger();
     final Map<String,String> providerState=new LinkedHashMap<>();final Model backgroundModel=mock(Model.class);
+    PgEpisodeStore episodeStore;
     final String intent="先查询并分析报价，再准备创建操作；本次写入必须等待我确认。";
 
     @BeforeEach void initialize() {
@@ -47,9 +48,10 @@ class JdbcOrchestrationAcceptanceTest {
         jdbc.execute("CREATE TABLE messages(id TEXT PRIMARY KEY,session_id TEXT,ts BIGINT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL)");ProfileStore.initializeSchema(jdbc);
         store=new JdbcCoordinationStore(jdbc,source,json);store.initialize();states=new JdbcAgentStateStore(jdbc,json);states.initialize();leases=new JdbcExecutionLeaseStore(jdbc,source);leases.initialize();
         queue=new JdbcTaskQueue(jdbc,source,json,store,leases);queue.initialize();budgets=new JdbcGoalBudgetStore(jdbc,source,json);budgets.initialize();profiles=new ProfileStore(jdbc);traces=new TraceStore(new PgEventPublisher(jdbc));
-        var episodeStore=new PgEpisodeStore(jdbc);var embeddings=mock(EmbeddingClient.class);
-        memory=new MioLongTermMemory(new ProfileDistiller(backgroundModel,profiles,mock(EntityStore.class),json,Runnable::run,false),mock(AutomationStore.class),mock(ProfileInjector.class),
-                new EpisodeRetriever(false,3,.6,episodeStore,mock(VectorStore.class),embeddings,Runnable::run),embeddings,episodeStore);
+        var memoryJobs=new org.celanwang.mio.memory.jobs.JdbcMemoryJobs(jdbc,source,3,120000,1000);memoryJobs.initialize();
+        episodeStore=new PgEpisodeStore(jdbc,memoryJobs,false,false);var embeddings=mock(EmbeddingClient.class);
+        memory=new MioLongTermMemory(mock(AutomationStore.class),mock(ProfileInjector.class),
+                new EpisodeRetriever(false,3,.6,episodeStore,mock(VectorStore.class),embeddings),embeddings,episodeStore);
         var quote=new AgentCapability("quote-domain","报价能力","只准备报价","quote-skill","v1",List.of(),List.of(),List.of(CapabilityOutputContract.report(),CapabilityOutputContract.rideQuote()));
         var action=new AgentCapability("action-domain","执行能力","分析或经批准执行","action-skill","v1",List.of(),CapabilityInputContract.contextual(),List.of(CapabilityOutputContract.report(),CapabilityOutputContract.resourceReference()));
         registry=new AgentRegistry(List.of(quote,action));
@@ -141,7 +143,7 @@ class JdbcOrchestrationAcceptanceTest {
         int models=approve?12:11;
         assertThat(response.getBudget().models()).isEqualTo(models);assertThat(response.getBudget().knownTokens()).isEqualTo(models*8L);assertThat(response.getBudget().usageComplete()).isTrue();
         assertThat(states.exists(null,"root:supervisor")).isTrue();for(var task:store.tasks("root"))assertThat(states.exists(null,task.childSessionId())).isTrue();
-        var remembered=new PgEpisodeStore(jdbc).listAll();assertThat(remembered).hasSize(2);assertThat(remembered).extracting(EpisodeStore.Episode::sessionId).containsOnly("root");
+        var remembered=episodeStore.listAll();assertThat(remembered).hasSize(2);assertThat(remembered).extracting(EpisodeStore.Episode::sessionId).containsOnly("root");
         assertThat(remembered).extracting(EpisodeStore.Episode::text).contains(intent).doesNotContain("分析报价","取得可信报价");verifyNoInteractions(backgroundModel);
         var noModel=mock(Model.class);var restored=service(noModel).response("root","");
         assertThat(restored.getBudget()).isEqualTo(response.getBudget());assertThat(restored.getTasks()).hasSize(3);verifyNoInteractions(noModel);

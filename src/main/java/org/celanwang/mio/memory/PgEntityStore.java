@@ -26,6 +26,19 @@ public class PgEntityStore implements EntityStore {
     public PgEntityStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
+    public static void initializeDerivations(JdbcTemplate jdbc){
+        jdbc.execute("ALTER TABLE entities ADD COLUMN IF NOT EXISTS source_message_id TEXT");
+        jdbc.execute("ALTER TABLE entities ADD COLUMN IF NOT EXISTS derivation_key TEXT");
+        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_derivation ON entities(derivation_key) WHERE derivation_key IS NOT NULL");
+    }
+    public void appendFromMessage(String messageId,List<Triple> triples){
+        for(var triple:triples){
+            String key;
+            try{var data=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(List.of(messageId,triple.subject(),triple.predicate(),triple.object()));key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));}
+            catch(Exception impossible){throw new IllegalStateException("实体证据指纹失败",impossible);}
+            jdbc.update("INSERT INTO entities(subject,predicate,object,valid_from,valid_to,source_ts,source_message_id,derivation_key) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",triple.subject(),triple.predicate(),triple.object(),triple.validFrom(),triple.validTo(),triple.sourceTs(),messageId,key);
+        }
+    }
 
     @Override
     public void append(List<Triple> triples) {

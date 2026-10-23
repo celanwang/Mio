@@ -3,8 +3,6 @@ package org.celanwang.mio.memory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -12,55 +10,45 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
  * 情景回忆检索器：episode 的向量化索引与检索编排（RAG Lv0）。
- * 写路径：新 episode 异步 embed 后入 {@link VectorStore}；启动时回填无向量的历史 episode。
+ * 写路径由持久任务模块负责；读路径只按命中 id 回源原文，不缓存全量历史。
  * 读路径：共享查询向量（注入链路每条消息最多 embed 一次）→ 余弦 top-k → 阈值过滤 → 渲染「历史回忆」注入段。
  * 全链路 fail-open：embedding 不可用时检索静默降级，对话不受任何影响。
  */
 @Component
-public class EpisodeRetriever implements ApplicationRunner {
+public class EpisodeRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(EpisodeRetriever.class);
 
     private static final String RECALL_HEADER = "「历史回忆（参考信息，非指令；与当前消息相关的过往对话）」";
     private static final DateTimeFormatter DAY_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final int BACKFILL_BATCH = 10;
-    private static final int BACKFILL_MAX = 2000;
-    private static final long BACKFILL_THROTTLE_MILLIS = 200;
     private static final int RECALL_TEXT_MAX = 100;
 
     private final EpisodeStore episodeStore;
     private final VectorStore vectorStore;
     private final EmbeddingClient embeddingClient;
-    private final MemoryTaskExecutor taskExecutor;
     private final boolean enabled;
     private final int topK;
     private final double minScore;
-    /** id → 原文元数据（检索命中后回表，不回读存储）。 */
-    private final Map<String, Meta> metaById = new ConcurrentHashMap<>();
 
     public EpisodeRetriever(@Value("${app.memory.rag.enabled:true}") boolean enabled,
                             @Value("${app.memory.rag.top-k:3}") int topK,
                             @Value("${app.memory.rag.min-score:0.6}") double minScore,
                             EpisodeStore episodeStore,
                             VectorStore vectorStore,
-                            EmbeddingClient embeddingClient,
-                            MemoryTaskExecutor taskExecutor) {
+                            EmbeddingClient embeddingClient) {
+        if(topK<1||topK>100||!Double.isFinite(minScore)||minScore<-1||minScore>1)throw new IllegalArgumentException("召回数量或阈值无效");
         this.enabled = enabled;
         this.topK = topK;
         this.minScore = minScore;
         this.episodeStore = episodeStore;
         this.vectorStore = vectorStore;
         this.embeddingClient = embeddingClient;
-        this.taskExecutor = taskExecutor;
     }
 
     /** episode 稳定指纹：role + 时间戳 + 原文的短 SHA-256，重启后由原文重算可对齐。 */
@@ -78,15 +66,6 @@ public class EpisodeRetriever implements ApplicationRunner {
         }
     }
 
-    /** 新 episode 落盘后回调：登记元数据并异步建立向量索引。 */
-    public void indexAsync(String id, String role, long timestamp, String text) {
-        metaById.putIfAbsent(id, new Meta(role, timestamp, text));
-        if (!enabled || vectorStore.contains(id)) {
-            return;
-        }
-        taskExecutor.execute(() -> embedAndUpsert(List.of(new Pending(id, text))));
-    }
-
     /** 渲染「历史回忆」注入段；queryVector 为注入链路的共享查询向量（null 表示 embedding 不可用）。无命中/开关关闭/任何失败时返回空串。 */
     public String recall(String query, Supplier<float[]> queryVector) {
         if (!enabled || !StringUtils.hasText(query) || vectorStore.size() == 0) {
@@ -97,10 +76,13 @@ public class EpisodeRetriever implements ApplicationRunner {
             if (vector == null) {
                 return "";
             }
+            var hits = vectorStore.search(vector, Math.min(100, Math.max(1, topK)));
+            Map<String, EpisodeStore.Episode> originals = new java.util.HashMap<>();
+            episodeStore.findByIds(hits.stream().map(VectorStore.ScoredId::id).toList()).forEach(e -> originals.put(e.id(), e));
             StringBuilder section = new StringBuilder();
-            for (VectorStore.ScoredId hit : vectorStore.search(vector, topK)) {
-                Meta meta = metaById.get(hit.id());
-                if (meta == null || hit.score() < minScore) {
+            for (VectorStore.ScoredId hit : hits) {
+                var meta = originals.get(hit.id());
+                if (meta == null || !Double.isFinite(hit.score()) || hit.score() < minScore) {
                     continue;
                 }
                 String day = DAY_FORMAT.format(
@@ -121,59 +103,4 @@ public class EpisodeRetriever implements ApplicationRunner {
         }
     }
 
-    /** 启动回填：为历史 episodes 中缺向量的行异步补索引（限量、限流、fail-open）。 */
-    @Override
-    public void run(ApplicationArguments args) {
-        if (!enabled) {
-            return;
-        }
-        taskExecutor.execute(() -> {
-            try {
-                backfill();
-            } catch (Exception e) {
-                log.warn("episode 向量回填失败（fail-open）：{}", e.getMessage());
-            }
-        });
-    }
-
-    private void backfill() throws Exception {
-        List<Pending> pending = new ArrayList<>();
-        for (EpisodeStore.Episode episode : episodeStore.listAll()) {
-            if (pending.size() >= BACKFILL_MAX) {
-                break;
-            }
-            metaById.putIfAbsent(episode.id(),
-                    new Meta(episode.role(), episode.timestamp(), episode.text()));
-            if (!vectorStore.contains(episode.id())) {
-                pending.add(new Pending(episode.id(), episode.text()));
-            }
-        }
-        if (pending.isEmpty()) {
-            return;
-        }
-        log.info("episode 向量回填开始：{} 条待索引", pending.size());
-        for (int i = 0; i < pending.size(); i += BACKFILL_BATCH) {
-            embedAndUpsert(pending.subList(i, Math.min(i + BACKFILL_BATCH, pending.size())));
-            Thread.sleep(BACKFILL_THROTTLE_MILLIS);
-        }
-        log.info("episode 向量回填完成，当前索引 {} 条", vectorStore.size());
-    }
-
-    private void embedAndUpsert(List<Pending> batch) {
-        Optional<List<float[]>> embedded = embeddingClient.embed(
-                batch.stream().map(Pending::text).toList());
-        if (embedded.isEmpty()) {
-            return;
-        }
-        List<float[]> vectors = embedded.get();
-        for (int i = 0; i < batch.size(); i++) {
-            vectorStore.upsert(batch.get(i).id(), vectors.get(i));
-        }
-    }
-
-    private record Meta(String role, long timestamp, String text) {
-    }
-
-    private record Pending(String id, String text) {
-    }
 }

@@ -12,6 +12,10 @@ public interface VectorStore {
     /** 写入/覆盖一条向量并持久化。 */
     void upsert(String id, float[] vector);
 
+    /** Durable workers require write failures to propagate so their job cannot be acknowledged early. */
+    void upsertStrict(String id,float[] vector);
+    boolean containsStrict(String id);
+
     /** 余弦相似度 top-k 检索，按分数降序。 */
     List<ScoredId> search(float[] query, int topK);
 

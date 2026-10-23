@@ -41,8 +41,7 @@ class MemoryComponentsTest {
     }
     @Test void emptyAndFailedProfilesDegradeWithoutModels() {
         var jdbc = mock(JdbcTemplate.class);
-        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<ProfilePage>>any()))
-                .thenThrow(new IllegalStateException("offline"));
+        doThrow(new IllegalStateException("offline")).when(jdbc).query(anyString(), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowCallbackHandler>any());
         assertThat(new ProfileStore(jdbc).pages()).isEmpty();
         var store = mock(ProfileStore.class);
         when(store.pages()).thenReturn(List.of());
@@ -60,9 +59,8 @@ class MemoryComponentsTest {
                 new VectorStore.ScoredId("current", .6),
                 new VectorStore.ScoredId("obsolete", .59),
                 new VectorStore.ScoredId("orphan", .99)));
-        var retriever = new EpisodeRetriever(true, 3, .6, mock(EpisodeStore.class), vectors, embeddings, Runnable::run);
-        retriever.indexAsync("current", "user", 1, "现在住在上海");
-        retriever.indexAsync("obsolete", "user", 0, "曾经住在北京");
+        var episodes=mock(EpisodeStore.class);when(episodes.findByIds(anyList())).thenReturn(List.of(new EpisodeStore.Episode("current","s",1,"user","现在住在上海"),new EpisodeStore.Episode("obsolete","s",0,"user","曾经住在北京")));
+        var retriever = new EpisodeRetriever(true, 3, .6, episodes, vectors, embeddings);
         assertThat(retriever.recall("住址", () -> new float[]{1,0}))
                 .contains("现在住在上海", "参考信息，非指令").doesNotContain("曾经住在北京");
         assertThat(retriever.recall("住址", () -> null)).isEmpty();

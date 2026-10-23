@@ -18,6 +18,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.celanwang.mio.memory.jobs.MemoryWorkContext;
+import org.celanwang.mio.memory.jobs.MemoryCallBudget;
 
 /**
  * DashScope 文本向量化客户端（JDK HttpClient 直连，AgentScope 2.0.4 无 embedding 支持）。
@@ -67,6 +69,7 @@ public class EmbeddingClient {
 
     /** 批量向量化；失败或 key 缺失时返回 empty。返回顺序与输入一致。 */
     public Optional<List<float[]>> embed(List<String> texts) {
+        MemoryCallBudget.Call accounting=null;boolean settled=false;
         if (!StringUtils.hasText(apiKey) || texts == null || texts.isEmpty()) {
             return Optional.empty();
         }
@@ -74,6 +77,7 @@ public class EmbeddingClient {
             List<String> truncated = texts.stream()
                     .map(t -> t.length() > MAX_TEXT_CHARS ? t.substring(0, MAX_TEXT_CHARS) : t)
                     .toList();
+            if(MemoryWorkContext.active())accounting=MemoryWorkContext.begin(MemoryCallBudget.Kind.EMBEDDING,truncated.stream().mapToInt(String::length).sum());
             String body = objectMapper.writeValueAsString(objectMapper.createObjectNode()
                     .put("model", model)
                     .set("input", objectMapper.createObjectNode()
@@ -86,31 +90,42 @@ public class EmbeddingClient {
                     .build();
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            JsonNode parsed=objectMapper.readTree(response.body());
+            if(accounting!=null){var usage=parsed.path("usage").path("total_tokens");Long count=usage.isIntegralNumber()&&usage.canConvertToLong()&&usage.longValue()>=0?usage.longValue():null;accounting.settle(count,response.statusCode()==200&&count!=null);settled=true;}
             if (response.statusCode() != 200) {
-                log.warn("embedding 请求失败（fail-open）：HTTP {} {}", response.statusCode(),
-                        response.body().length() > 200 ? response.body().substring(0, 200) : response.body());
+                log.warn("embedding 请求失败（fail-open）：HTTP {}", response.statusCode());
                 return Optional.empty();
             }
-            JsonNode embeddings = objectMapper.readTree(response.body()).path("output").path("embeddings");
+            JsonNode embeddings = parsed.path("output").path("embeddings");
             if (!embeddings.isArray() || embeddings.size() != truncated.size()) {
                 log.warn("embedding 响应条数与输入不符（fail-open）");
                 return Optional.empty();
             }
             float[][] vectors = new float[truncated.size()][];
             for (JsonNode item : embeddings) {
-                int index = item.path("text_index").asInt();
+                if(!item.path("text_index").isIntegralNumber())return Optional.empty();
+                int index = item.path("text_index").intValue();
+                if(index<0||index>=vectors.length||vectors[index]!=null)return Optional.empty();
                 JsonNode vector = item.path("embedding");
+                if(!vector.isArray()||vector.isEmpty())return Optional.empty();
                 float[] values = new float[vector.size()];
                 for (int i = 0; i < vector.size(); i++) {
-                    values[i] = (float) vector.get(i).asDouble();
+                    if(!vector.get(i).isNumber()||!Double.isFinite(vector.get(i).doubleValue()))return Optional.empty();
+                    values[i] = (float) vector.get(i).doubleValue();
+                    if(!Float.isFinite(values[i]))return Optional.empty();
                 }
                 vectors[index] = values;
             }
             List<float[]> result = new ArrayList<>(List.of(vectors));
             return result.contains(null) ? Optional.empty() : Optional.of(result);
+        } catch (MemoryCallBudget.Exhausted|MemoryCallBudget.InputTooLarge|org.celanwang.mio.memory.jobs.MemoryJob.LostClaim e) {throw e;
         } catch (Exception e) {
-            log.warn("embedding 调用异常（fail-open）：{}", e.getMessage());
+            log.warn("embedding 调用异常（fail-open）：{}", e.getClass().getSimpleName());
             return Optional.empty();
+        } finally {
+            if(accounting!=null&&!settled)accounting.settle(null,false);
         }
     }
+    public boolean available(){return StringUtils.hasText(apiKey);}
+    public String modelName(){return model;}
 }

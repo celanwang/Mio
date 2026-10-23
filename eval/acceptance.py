@@ -9,7 +9,8 @@ import uuid
 import xml.etree.ElementTree as ET
 
 PG_SUITES = ('JdbcPostgresIntegrationTest', 'JdbcTaskQueueIntegrationTest', 'JdbcGoalLifecycleIntegrationTest',
-             'JdbcMemoryConsistencyIntegrationTest', 'JdbcOrchestrationAcceptanceTest', 'JdbcGoalAcceptanceIntegrationTest')
+             'JdbcMemoryConsistencyIntegrationTest', 'JdbcOrchestrationAcceptanceTest', 'JdbcGoalAcceptanceIntegrationTest',
+             'JdbcMemoryJobsIntegrationTest', 'JdbcMemoryUsageIntegrationTest')
 
 
 def fingerprint(root):

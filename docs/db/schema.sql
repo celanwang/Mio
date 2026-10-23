@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
 
--- 3. 消息向量:派生态,与真相源物理隔离,可随时 TRUNCATE 后异步重建
+-- 3. 消息向量:派生态；清空或更换模型需显式重建迁移，不自动重置已完成作业。
 CREATE TABLE IF NOT EXISTS embeddings (
     id        TEXT PRIMARY KEY,            -- 与 messages.id 同值
     embedding vector(1024) NOT NULL        -- DashScope text-embedding-v4,维度 1024
@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS entities (
     valid_to   BIGINT,
     source_ts  BIGINT NOT NULL
 );
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS source_message_id TEXT;
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS derivation_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_derivation ON entities(derivation_key) WHERE derivation_key IS NOT NULL;
 
 -- 5. 画像页:蒸馏视图,content 即 Markdown 逻辑文档(Memory as File 的 PG 表达)
 CREATE TABLE IF NOT EXISTS profiles (
@@ -58,7 +61,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     source          TEXT NOT NULL,         -- explicit(手动)/ inferred(提炼器)
     confidence      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     content         TEXT NOT NULL,         -- Markdown 正文
-    source_messages TEXT[],                -- 溯源:证据消息 id 列表(排期:蒸馏器改造时消费)
+    source_messages TEXT[],                -- 兼容保留；当前来源通过作业检查点与 source_position 关联
     created_at      BIGINT,
     updated_at      BIGINT NOT NULL,
     revision        BIGINT NOT NULL DEFAULT 0,
@@ -66,6 +69,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS source_position BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope);
 
 -- 6. 信任统计:只观察统计,不做自动放行;fail-closed,数据只进 PG
@@ -173,3 +177,26 @@ CREATE TABLE IF NOT EXISTS goal_acceptances(
     revision BIGINT NOT NULL,
     content TEXT NOT NULL
 );
+
+-- 原文与派生作业同事务登记；结果检查点不通过诊断 API 返回。
+CREATE TABLE IF NOT EXISTS memory_jobs(
+    id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id), kind TEXT NOT NULL,
+    sequence BIGSERIAL UNIQUE, priority INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0, generation BIGINT NOT NULL DEFAULT 0, owner TEXT,
+    lease_until BIGINT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL DEFAULT 0,
+    result TEXT, error_code TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_jobs_ready ON memory_jobs(state,next_attempt_at,sequence);
+CREATE TABLE IF NOT EXISTS memory_backfills(id TEXT PRIMARY KEY,cursor TEXT NOT NULL DEFAULT '',finished INTEGER NOT NULL DEFAULT 0);
+INSERT INTO memory_backfills(id) VALUES ('episode-index-v1') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS memory_job_lanes(id TEXT PRIMARY KEY);
+INSERT INTO memory_job_lanes(id) VALUES ('DISTILL') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS memory_usage_days(
+    day TEXT PRIMARY KEY,calls INTEGER NOT NULL DEFAULT 0,input_chars BIGINT NOT NULL DEFAULT 0,
+    known_tokens BIGINT NOT NULL DEFAULT 0,pending INTEGER NOT NULL DEFAULT 0,unknown INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS memory_usage_calls(
+    id TEXT PRIMARY KEY,day TEXT NOT NULL REFERENCES memory_usage_days(day),kind TEXT NOT NULL,
+    job_id TEXT,generation BIGINT,state TEXT NOT NULL,tokens BIGINT,created_at BIGINT NOT NULL,expires_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_usage_pending ON memory_usage_calls(state,expires_at);

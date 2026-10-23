@@ -2,7 +2,7 @@
 # Disposable PostgreSQL, loopback only, no business credentials or persistent volume.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-mio_eval_container=$(docker run --rm -d -e POSTGRES_PASSWORD=mio-eval-only -p 127.0.0.1::5432 postgres:16)
+mio_eval_container=$(docker run --rm -d -e POSTGRES_PASSWORD=mio-eval-only -p 127.0.0.1::5432 pgvector/pgvector:pg16)
 trap 'docker rm -f "$mio_eval_container" >/dev/null 2>&1 || true' EXIT
 mio_eval_ready=false
 for mio_eval_attempt in {1..30}; do

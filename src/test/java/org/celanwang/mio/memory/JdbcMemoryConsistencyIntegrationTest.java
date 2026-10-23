@@ -17,7 +17,7 @@ import static org.mockito.ArgumentMatchers.*;
 
 @EnabledIfEnvironmentVariable(named="MIO_TEST_PG_URL", matches="jdbc:postgresql:.*")
 class JdbcMemoryConsistencyIntegrationTest {
-    JdbcTemplate admin, jdbc;String schema;ProfileStore profiles;PgEpisodeStore episodes;
+    JdbcTemplate admin, jdbc;String schema;ProfileStore profiles;PgEpisodeStore episodes;org.celanwang.mio.memory.jobs.JdbcMemoryJobs jobs;
     @BeforeEach void initialize() {
         var base = new DriverManagerDataSource(System.getenv("MIO_TEST_PG_URL"), System.getenv().getOrDefault("MIO_TEST_PG_USERNAME", "postgres"), System.getenv().getOrDefault("MIO_TEST_PG_PASSWORD", ""));
         admin = new JdbcTemplate(base);schema = "mio_memory_" + UUID.randomUUID().toString().replace("-", "");admin.execute("CREATE SCHEMA " + schema);
@@ -32,7 +32,7 @@ class JdbcMemoryConsistencyIntegrationTest {
         jdbc.execute("CREATE TABLE profiles(id TEXT PRIMARY KEY, scope TEXT NOT NULL, title TEXT NOT NULL, source TEXT NOT NULL, confidence DOUBLE PRECISION NOT NULL, content TEXT NOT NULL, source_messages TEXT[], created_at BIGINT, updated_at BIGINT NOT NULL)");
         jdbc.update("INSERT INTO profiles(id,scope,title,source,confidence,content,updated_at) VALUES ('legacy','global','legacy','explicit',1,'保留原文',1)");
         ProfileStore.initializeSchema(jdbc);ProfileStore.initializeSchema(jdbc);
-        profiles = new ProfileStore(jdbc);episodes = new PgEpisodeStore(jdbc);
+        profiles = new ProfileStore(jdbc);jobs=new org.celanwang.mio.memory.jobs.JdbcMemoryJobs(jdbc,source,3,120000,1000);jobs.initialize();episodes = new PgEpisodeStore(jdbc,jobs,false,false);
     }
     @AfterEach void cleanup() {if (admin!=null && schema!=null) admin.execute("DROP SCHEMA " + schema + " CASCADE");}
     ProfilePage page(String id,String source,String text) {return new ProfilePage(id,id,"global",source,1,System.currentTimeMillis(),text);}
@@ -75,7 +75,12 @@ class JdbcMemoryConsistencyIntegrationTest {
                 return Flux.just(io.agentscope.core.model.ChatResponse.builder().content(List.of(TextBlock.builder()
                         .text("{\"pages\":[{\"slug\":\""+id+"\",\"title\":\"页面\",\"content\":\"旧模型结果\"}],\"triples\":[]}").build())).build());
             }));
-            new ProfileDistiller(model,profiles,mock(EntityStore.class),new ObjectMapper(),Runnable::run,true).distill("更新偏好");
+            var claim=new org.celanwang.mio.memory.jobs.MemoryJob.Claim("job-"+id,id,org.celanwang.mio.memory.jobs.MemoryJob.Kind.DISTILL,1,1,1,"owner",Long.MAX_VALUE,null);
+            org.celanwang.mio.memory.jobs.MemoryCallBudget budget=(kind,chars,owner)->(tokens,complete)->{};
+            try(var context=org.celanwang.mio.memory.jobs.MemoryWorkContext.open(budget,claim)) {
+                var distiller=new ProfileDistiller(model,profiles,new PgEntityStore(jdbc),new ObjectMapper(),true);
+                try {var plan=distiller.prepare(new EpisodeStore.Episode(id,"s",1,"user","更新偏好"),claim);distiller.apply(plan,claim);}catch(Exception error){throw new AssertionError(error);}
+            }
             assertThat(profiles.pagesStrict()).extracting(ProfilePage::content).doesNotContain("旧模型结果");
             if(delete)assertThat(profiles.pagesStrict()).extracting(ProfilePage::id).doesNotContain(id);
             else assertThat(profiles.pagesStrict()).filteredOn(p->p.id().equals(id)).extracting(ProfilePage::content).containsExactly("人工内容");
@@ -85,8 +90,8 @@ class JdbcMemoryConsistencyIntegrationTest {
         var episode=new EpisodeStore.Episode("message","s",1,"user","原文");
         var barrier=new CyclicBarrier(2);var pool=Executors.newFixedThreadPool(2);
         try {
-            var jobs=List.of(1,2).stream().map(i->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return new PgEpisodeStore(jdbc).append(episode);})).toList();
-            var results=new ArrayList<EpisodeStore.AppendResult>();for(var job:jobs)results.add(job.get(10,TimeUnit.SECONDS));
+            var submissions=List.of(1,2).stream().map(i->pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return new PgEpisodeStore(jdbc,jobs,false,false).append(episode);})).toList();
+            var results=new ArrayList<EpisodeStore.AppendResult>();for(var job:submissions)results.add(job.get(10,TimeUnit.SECONDS));
             assertThat(results).containsExactlyInAnyOrder(EpisodeStore.AppendResult.INSERTED,EpisodeStore.AppendResult.EXISTING);
         } finally {pool.shutdownNow();}
         assertThat(episodes.append(new EpisodeStore.Episode("message","s",2,"user","被改写"))).isEqualTo(EpisodeStore.AppendResult.FAILED);

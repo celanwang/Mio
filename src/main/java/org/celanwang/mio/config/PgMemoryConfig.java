@@ -46,10 +46,10 @@ public class PgMemoryConfig {
         return new JdbcTemplate(memoryDataSource);
     }
 
-    /** 启动自建表：DDL 与 docs/db/schema.sql 定稿保持一致（7 张表），embedding 模型 text-embedding-v4 维度 1024，向量列固定 vector(1024)。 */
+    /** 幂等初始化记忆源、派生态与后台作业；向量维度固定为 1024，DDL 见 docs/db/schema.sql。 */
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
-    ApplicationRunner pgMemorySchemaInitializer(JdbcTemplate memoryJdbcTemplate) {
+    ApplicationRunner pgMemorySchemaInitializer(JdbcTemplate memoryJdbcTemplate,org.celanwang.mio.memory.jobs.JdbcMemoryJobs jobs,org.celanwang.mio.memory.jobs.JdbcMemoryUsage usage) {
         return args -> {
             try {
                 memoryJdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS vector");
@@ -97,6 +97,8 @@ public class PgMemoryConfig {
                         )
                         """);
                 org.celanwang.mio.memory.ProfileStore.initializeSchema(memoryJdbcTemplate);
+                org.celanwang.mio.memory.PgEntityStore.initializeDerivations(memoryJdbcTemplate);
+                jobs.initialize();usage.initialize();
                 memoryJdbcTemplate.execute("""
                         CREATE TABLE IF NOT EXISTS trusts (
                             tool_name        TEXT NOT NULL,
@@ -122,7 +124,7 @@ public class PgMemoryConfig {
                         """);
                 memoryJdbcTemplate.execute(
                         "CREATE INDEX IF NOT EXISTS idx_automations_status ON automations(status)");
-                log.info("PG 记忆存储表结构就绪（events / messages / embeddings / entities / profiles / trusts / automations）");
+                log.info("PG 记忆源、派生态与后台作业表结构就绪");
             } catch (Exception e) {
                 log.warn("PG 记忆存储建表失败（fail-open，记忆链路静默降级）：{}", e.getMessage());
             }

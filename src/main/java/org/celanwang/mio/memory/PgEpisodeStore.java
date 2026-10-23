@@ -6,6 +6,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Collections;
+import org.celanwang.mio.memory.jobs.JdbcMemoryJobs;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * {@link EpisodeStore} 的 PG 实现（唯一实现）：episode 原文落 messages 表，
@@ -18,30 +23,30 @@ public class PgEpisodeStore implements EpisodeStore {
     private static final Logger log = LoggerFactory.getLogger(PgEpisodeStore.class);
 
     private final JdbcTemplate jdbc;
+    private final JdbcMemoryJobs jobs;
+    private final boolean index,distill;
 
-    public PgEpisodeStore(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    @Autowired
+    public PgEpisodeStore(JdbcTemplate jdbc,JdbcMemoryJobs jobs,@Value("${app.memory.rag.enabled:true}")boolean index,@Value("${app.memory.distiller.enabled:true}")boolean distill) {
+        this.jdbc = jdbc;this.jobs=jobs;this.index=index;this.distill=distill;
     }
 
     @Override
     public AppendResult append(Episode episode) {
         try {
-            int inserted = jdbc.update("""
-                    INSERT INTO messages(id, session_id, ts, role, text) VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT (id) DO NOTHING
-                    """, episode.id(), episode.sessionId(), episode.timestamp(),
-                    episode.role(), episode.text());
-            if (inserted == 1) return AppendResult.INSERTED;
-            Integer same = jdbc.queryForObject("""
-                    SELECT COUNT(*) FROM messages WHERE id = ? AND session_id IS NOT DISTINCT FROM ?
-                    AND role = ? AND text = ?
-                    """, Integer.class, episode.id(), episode.sessionId(), episode.role(), episode.text());
-            if (Integer.valueOf(1).equals(same)) return AppendResult.EXISTING;
-            log.warn("会话消息身份冲突，保留原文且不建立派生索引");
+            return jobs.append(episode,index,distill);
         } catch (Exception e) {
-            log.warn("会话消息落库失败（不影响主流程）：{}", e.getMessage());
+            log.warn("会话消息与派生任务登记失败（不影响主流程）：{}", e.getClass().getSimpleName());
         }
         return AppendResult.FAILED;
+    }
+
+    @Override public Optional<Episode> find(String id){return jdbc.query("SELECT id,session_id,ts,role,text FROM messages WHERE id=?",(r,n)->new Episode(r.getString(1),r.getString(2),r.getLong(3),r.getString(4),r.getString(5)),id).stream().findFirst();}
+
+    @Override public List<Episode> findByIds(List<String> ids){
+        if(ids.isEmpty())return List.of();if(ids.size()>100)throw new IllegalArgumentException("消息回源数量过多");
+        try{return jdbc.query("SELECT id,session_id,ts,role,text FROM messages WHERE id IN ("+String.join(",",Collections.nCopies(ids.size(),"?"))+")",(r,n)->new Episode(r.getString(1),r.getString(2),r.getLong(3),r.getString(4),r.getString(5)),ids.toArray());}
+        catch(Exception unavailable){log.warn("召回原文读取失败，按无结果处理");return List.of();}
     }
 
     @Override

@@ -16,8 +16,9 @@ class ProfileConsistencyTest {
     @Test void failedSnapshotNeverBecomesAnEmptyPromptOrModelWrite() {
         var store = mock(ProfileStore.class);var model = mock(Model.class);
         when(store.snapshot()).thenThrow(new DataAccessResourceFailureException("offline"));
-        var distiller = new ProfileDistiller(model, store, mock(EntityStore.class), new ObjectMapper(), Runnable::run, true);
-        distiller.distill("更新地址");verifyNoInteractions(model);verify(store, never()).saveInferred(any(), any());
+        var distiller = new ProfileDistiller(model, store, mock(PgEntityStore.class), new ObjectMapper(), true);
+        var claim=new org.celanwang.mio.memory.jobs.MemoryJob.Claim("job","m",org.celanwang.mio.memory.jobs.MemoryJob.Kind.DISTILL,1,1,1,"owner",Long.MAX_VALUE,null);
+        assertThatThrownBy(()->distiller.prepare(new EpisodeStore.Episode("m","s",1,"user","更新地址"),claim)).isInstanceOf(DataAccessResourceFailureException.class);verifyNoInteractions(model);verify(store, never()).saveInferred(any(), any());
     }
     @Test void manualMutationAndReadFailuresReturn503WithoutLeakingDatabaseDetails() throws Exception {
         var store = mock(ProfileStore.class);

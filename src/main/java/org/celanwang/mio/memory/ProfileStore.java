@@ -43,6 +43,7 @@ public class ProfileStore {
                 """);
         jdbc.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0");
         jdbc.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at BIGINT");
+        jdbc.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS source_position BIGINT NOT NULL DEFAULT 0");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_profiles_scope ON profiles(scope)");
     }
 
@@ -108,17 +109,20 @@ public class ProfileStore {
 
     /** 未存在的页面只能新建；已有推断页仅允许按原版本更新，人工页和删除页永不自动覆盖。 */
     public boolean saveInferred(ProfilePage page, Long expectedRevision) {
+        return saveInferred(page,expectedRevision,0);
+    }
+    public boolean saveInferred(ProfilePage page,Long expectedRevision,long sourcePosition) {
         if (!SOURCE_INFERRED.equals(page.source())) throw new IllegalArgumentException("提炼来源无效");
         if (expectedRevision == null) {
             return jdbc.update("""
-                    INSERT INTO profiles(id, scope, title, source, confidence, content, updated_at, revision)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT (id) DO NOTHING
-                    """, page.id(), page.scope(), page.title(), page.source(), page.confidence(), page.content(), page.updatedAt()) == 1;
+                    INSERT INTO profiles(id, scope, title, source, confidence, content, updated_at, revision,source_position)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1,?) ON CONFLICT (id) DO NOTHING
+                    """, page.id(), page.scope(), page.title(), page.source(), page.confidence(), page.content(), page.updatedAt(),sourcePosition) == 1;
         }
         return jdbc.update("""
-                UPDATE profiles SET scope = ?, title = ?, confidence = ?, content = ?, updated_at = ?, revision = revision + 1
-                WHERE id = ? AND revision = ? AND source = 'inferred' AND deleted_at IS NULL
-                """, page.scope(), page.title(), page.confidence(), page.content(), page.updatedAt(), page.id(), expectedRevision) == 1;
+                UPDATE profiles SET scope = ?, title = ?, confidence = ?, content = ?, updated_at = ?, revision = revision + 1,source_position=?
+                WHERE id = ? AND revision = ? AND source = 'inferred' AND deleted_at IS NULL AND source_position<=?
+                """, page.scope(), page.title(), page.confidence(), page.content(), page.updatedAt(),sourcePosition, page.id(), expectedRevision,sourcePosition) == 1;
     }
 
     /** 渲染指定页面列表为注入文本（按 scope 分组）；空列表返回空串。 */

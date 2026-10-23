@@ -14,8 +14,14 @@ public interface EpisodeStore {
     /** 追加一条原文；只有数据库确认后才能用于去重或建立派生索引。 */
     AppendResult append(Episode episode);
 
-    /** 全量 episode（启动回填向量索引用），按时间升序。 */
+    /** 仅供离线诊断；运行时召回和历史补建不使用全量读取。 */
     List<Episode> listAll();
+
+    /** Bounded primary-source lookup after vector search; missing rows are never fabricated. */
+    List<Episode> findByIds(List<String> ids);
+
+    /** Strict source lookup for durable workers. */
+    java.util.Optional<Episode> find(String id);
 
     /**
      * 一条会话消息原始记录。

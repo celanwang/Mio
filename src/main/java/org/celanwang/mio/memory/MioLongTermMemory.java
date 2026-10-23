@@ -29,22 +29,19 @@ public class MioLongTermMemory implements LongTermMemory {
     private static final Logger log = LoggerFactory.getLogger(MioLongTermMemory.class);
     private static final int MAX_RECENT_HASHES = 2000;
 
-    private final ProfileDistiller distiller;
     private final AutomationStore automationStore;
     private final ProfileInjector profileInjector;
     private final EpisodeRetriever episodeRetriever;
     private final EmbeddingClient embeddingClient;
     private final EpisodeStore episodeStore;
-    /** 已确认落库且已接收索引任务的消息身份缓存；持久幂等仍由 PG 保证。 */
+    /** 已确认原文及配置要求的派生任务同事务落库；持久幂等仍由 PG 保证。 */
     private final Set<String> recentHashes = new LinkedHashSet<>();
 
-    public MioLongTermMemory(ProfileDistiller distiller,
-                             AutomationStore automationStore,
+    public MioLongTermMemory(AutomationStore automationStore,
                              ProfileInjector profileInjector,
                              EpisodeRetriever episodeRetriever,
                              EmbeddingClient embeddingClient,
                              EpisodeStore episodeStore) {
-        this.distiller = distiller;
         this.automationStore = automationStore;
         this.profileInjector = profileInjector;
         this.episodeRetriever = episodeRetriever;
@@ -131,18 +128,17 @@ public class MioLongTermMemory implements LongTermMemory {
      */
     public Mono<Void> record(List<Msg> msgs, String sessionId) {
         return Mono.fromRunnable(() -> {
-                    String lastUserText = recordEpisodes(msgs, sessionId);
-                    distiller.distill(lastUserText);
+                    recordEpisodes(msgs, sessionId);
                 })
                 .doOnError(e -> log.warn("长期记忆写入失败（fail-open）：{}", e.getMessage()))
                 .onErrorResume(e -> Mono.empty())
                 .then();
     }
 
-    /** 把未记录过的 user/assistant 文本消息追加到 episode 存储，返回最近一条用户消息文本。 */
-    private String recordEpisodes(List<Msg> msgs, String sessionId) {
-        String lastUserText = null;
+    /** 原文和派生任务由 PG 同事务登记；每条新用户消息各自拥有提炼任务。 */
+    private void recordEpisodes(List<Msg> msgs, String sessionId) {
         for (Msg msg : msgs) {
+            if(Boolean.TRUE.equals(msg.getMetadata().get(Msg.METADATA_SYNTHETIC)))continue;
             if (msg.getRole() != MsgRole.USER && msg.getRole() != MsgRole.ASSISTANT) {
                 continue;
             }
@@ -152,12 +148,8 @@ public class MioLongTermMemory implements LongTermMemory {
             }
             String id = messageId(sessionId, msg.getId());
             if (seen(id)) continue;
-            var result = appendEpisode(msg, text, sessionId, id);
-            if (result == EpisodeStore.AppendResult.INSERTED && msg.getRole() == MsgRole.USER) {
-                lastUserText = text;
-            }
+            appendEpisode(msg, text, sessionId, id);
         }
-        return lastUserText;
     }
 
     private EpisodeStore.AppendResult appendEpisode(Msg msg, String text, String sessionId, String id) {
@@ -166,12 +158,7 @@ public class MioLongTermMemory implements LongTermMemory {
             String roleName = msg.getRole() == MsgRole.USER ? "user" : "assistant";
             var result = episodeStore.append(new EpisodeStore.Episode(id, sessionId, timestamp, roleName, text));
             if (result == null || result == EpisodeStore.AppendResult.FAILED) return EpisodeStore.AppendResult.FAILED;
-            try {
-                episodeRetriever.indexAsync(id, roleName, timestamp, text);
-                markSeen(id);
-            } catch (RuntimeException unavailable) {
-                log.warn("原文已保存，索引任务未接收；下次记录可补建索引");
-            }
+            markSeen(id);
             return result;
         } catch (Exception e) {
             log.warn("会话消息落盘失败（不影响主流程）：{}", e.getMessage());

@@ -91,6 +91,19 @@ app:
     policy-mode: ${MIO_SECURITY_POLICY_MODE:shadow}
 
   memory:
+    jobs:
+      # 仅消费记忆派生任务；停用不删除已登记任务，不消费业务工具或操作批准。
+      enabled: ${MIO_MEMORY_JOBS_ENABLED:true}
+      parallelism: ${MIO_MEMORY_JOBS_PARALLELISM:2}
+      max-attempts: ${MIO_MEMORY_JOBS_MAX_ATTEMPTS:3}
+      lease-ms: ${MIO_MEMORY_JOBS_LEASE_MS:120000}
+      retry-ms: ${MIO_MEMORY_JOBS_RETRY_MS:10000}
+      backfill-page-size: ${MIO_MEMORY_BACKFILL_PAGE_SIZE:100}
+      transient-queue-capacity: ${MIO_MEMORY_CACHE_QUEUE_CAPACITY:32}
+      # UTC 日后台额度；调用和输入长度先预占，未知 token 不视作零费用。
+      daily-calls: ${MIO_MEMORY_DAILY_CALLS:200}
+      daily-input-characters: ${MIO_MEMORY_DAILY_INPUT_CHARACTERS:400000}
+      daily-known-tokens: ${MIO_MEMORY_DAILY_KNOWN_TOKENS:200000}
     pg:
       # 记忆存储（唯一后端，PostgreSQL + pgvector）连接信息
       # （在 .env 或运行配置中设置 MIO_PG_JDBC_URL / MIO_PG_USERNAME / MIO_PG_PASSWORD）。

@@ -8,10 +8,9 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class MemoryRecordingTest {
-    final ProfileDistiller distiller = mock(ProfileDistiller.class);
     final EpisodeRetriever retriever = mock(EpisodeRetriever.class);
     final EpisodeStore store = mock(EpisodeStore.class);
-    MioLongTermMemory memory() {return new MioLongTermMemory(distiller, mock(AutomationStore.class),
+    MioLongTermMemory memory() {return new MioLongTermMemory(mock(AutomationStore.class),
             mock(ProfileInjector.class), retriever, mock(EmbeddingClient.class), store);}
     Msg message(String id, String text) {return Msg.builder().id(id).role(MsgRole.USER)
             .timestamp("2026-10-22T01:00:00Z").textContent(text).build();}
@@ -27,30 +26,29 @@ class MemoryRecordingTest {
         memory().record(List.of(first, second), "s1").block();
         assertThat(rows).hasSize(3);
         assertThat(rows.values()).allSatisfy(e -> assertThat(e.timestamp()).isEqualTo(1792630800000L));
-        verify(distiller, times(2)).distill("还是这个地址");
+        verifyNoInteractions(retriever);
     }
 
     @Test void failedAppendIsRetriedAndNeverIndexedOrDistilledBeforePersistence() {
         when(store.append(any())).thenReturn(EpisodeStore.AppendResult.FAILED, EpisodeStore.AppendResult.INSERTED);
         var memory = memory();var messages = List.of(message("one", "不要辣椒"));
         memory.record(messages, "s").block();verifyNoInteractions(retriever);
-        verify(distiller).distill(null);
         memory.record(messages, "s").block();memory.record(messages, "s").block();
-        verify(store, times(2)).append(any());verify(retriever).indexAsync(anyString(), eq("user"), anyLong(), eq("不要辣椒"));
-        verify(distiller).distill("不要辣椒");
+        verify(store, times(2)).append(any());verifyNoInteractions(retriever);
     }
 
-    @Test void indexingRejectionCanBeRetriedWithoutLosingNewPreferenceOrDuplicatingDistillation() {
-        when(store.append(any())).thenReturn(EpisodeStore.AppendResult.INSERTED, EpisodeStore.AppendResult.EXISTING);
-        doThrow(new java.util.concurrent.RejectedExecutionException()).doNothing().when(retriever).indexAsync(anyString(), anyString(), anyLong(), anyString());
-        var memory = memory();var messages = List.of(message("one", "简洁回复"));
-        memory.record(messages, "s").block();memory.record(messages, "s").block();
-        verify(retriever, times(2)).indexAsync(anyString(), anyString(), anyLong(), anyString());
-        verify(distiller).distill("简洁回复");
+    @Test void everyNewUserMessageIsPersistedWithoutLaunchingUnmanagedDerivedWork() {
+        when(store.append(any())).thenReturn(EpisodeStore.AppendResult.INSERTED);
+        memory().record(List.of(message("one","不要辣椒"),message("two","常住上海")),"s").block();
+        verify(store,times(2)).append(any());verifyNoInteractions(retriever);
     }
 
     @Test void identityEncodingDistinguishesAbsentAndEmptySessionsAndEmbeddedDelimiters() {
         assertThat(MioLongTermMemory.messageId(null,"id")).isNotEqualTo(MioLongTermMemory.messageId("","id"));
         assertThat(MioLongTermMemory.messageId("a","bc")).isNotEqualTo(MioLongTermMemory.messageId("ab","c"));
+    }
+    @Test void frameworkSyntheticUserMessagesNeverBecomePreferenceSources() {
+        var reminder=Msg.builder().role(MsgRole.USER).textContent("内部提醒").metadata(Map.of(Msg.METADATA_SYNTHETIC,true)).build();
+        memory().record(List.of(reminder),"s").block();verifyNoInteractions(store,retriever);
     }
 }

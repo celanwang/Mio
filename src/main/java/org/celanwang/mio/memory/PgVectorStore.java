@@ -27,14 +27,19 @@ public class PgVectorStore implements VectorStore {
     @Override
     public void upsert(String id, float[] vector) {
         try {
-            jdbc.update("""
-                    INSERT INTO embeddings(id, embedding) VALUES (?, ?::vector)
-                    ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding
-                    """, id, toVectorLiteral(vector));
+            upsertStrict(id,vector);
         } catch (Exception e) {
             log.warn("向量写入失败（fail-open，跳过）：{}", e.getMessage());
         }
     }
+
+    @Override public void upsertStrict(String id,float[] vector){
+        if(vector==null||vector.length!=1024)throw new IllegalArgumentException("episode 向量维度必须为 1024");
+        double norm=0;for(float value:vector){if(!Float.isFinite(value))throw new IllegalArgumentException("向量不能含非有限值");norm+=(double)value*value;}
+        if(norm==0)throw new IllegalArgumentException("向量不能为零向量");
+        jdbc.update("INSERT INTO embeddings(id,embedding) VALUES (?,?::vector) ON CONFLICT(id) DO UPDATE SET embedding=EXCLUDED.embedding",id,toVectorLiteral(vector));
+    }
+    @Override public boolean containsStrict(String id){return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM embeddings WHERE id=?)",Boolean.class,id));}
 
     @Override
     public List<ScoredId> search(float[] query, int topK) {

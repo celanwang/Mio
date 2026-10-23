@@ -190,15 +190,15 @@ public class ProfileInjector {
         }
         taskExecutor.execute(() -> {
             try {
-                List<String> texts = stale.stream().map(this::embeddingText).toList();
-                Optional<List<float[]>> embedded = embeddingClient.embed(texts);
-                if (embedded.isEmpty()) {
-                    return;
-                }
-                List<float[]> vectors = embedded.get();
-                for (int i = 0; i < stale.size(); i++) {
-                    pageVectors.put(stale.get(i).id(), vectors.get(i));
-                    pageVectorHashes.put(stale.get(i).id(), String.valueOf(texts.get(i).hashCode()));
+                for(int from=0;from<stale.size();from+=10){
+                    var batch=stale.subList(from,Math.min(stale.size(),from+10));
+                    List<String> texts=batch.stream().map(this::embeddingText).toList();
+                    Optional<List<float[]>> embedded=embeddingClient.embed(texts);
+                    if(embedded.isEmpty())return;List<float[]> vectors=embedded.get();
+                    for(int i=0;i<batch.size();i++){
+                        pageVectors.put(batch.get(i).id(),vectors.get(i));
+                        pageVectorHashes.put(batch.get(i).id(),String.valueOf(texts.get(i).hashCode()));
+                    }
                 }
             } catch (Exception e) {
                 log.warn("画像页向量索引失败（fail-open）：{}", e.getMessage());
