@@ -116,3 +116,5 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 OFFLINE_COMPLETE 只说明受控前台工程边界通过本次离线验收。固定剧本仍不能晋升，真实模型、供应商回执覆盖、跨主机与后台自治的资格证据不由该状态推导。操作与扩展边界见 [Multi-Agent 收尾文档](../multi-agent/closure.md)。
 
 记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。
+
+发布维护与真实 dump/restore 为第九个必跑实库套件。完整验收还校验带同次运行编号与源码指纹的 6.0.0 JAR 及 SHA-256，拒绝旧包和缺失构建来源，见[发布与维护闭环](../release-maintenance.md)。

@@ -40,6 +40,8 @@ PgEpisodeStore 通过 JdbcMemoryJobs 在同一事务写入 messages 与配置要
 
 当前没有后台业务调度，也不承诺无限数据库容量或供应商账单硬限制。该模块提供有限重试与可诊断终态，不能将所有失败都自动标为已完成。
 
+修复失败原因后的单条 DEAD 重试通过独立 CLI 预览与执行，不在网页提供写入按钮；执行保留检查点和用量，并使旧领取代次失效。备份恢复需在应用停机时撤销旧执行身份、保留未知调用账目，详见[发布与维护闭环](release-maintenance.md)。
+
 ## 离线验收
 
 运行 `./scripts/eval-postgres.sh`，使用隔离的 pgvector/pgvector:pg16 容器，仅监听回环地址，不读取业务凭据；模型为替身，向量客户端契约测试只访问本机合成 HTTP 服务。完整验收要求 Java 17、Maven、Python 3、Node.js 18+ 与 Docker。
