@@ -1,3 +1,4 @@
+-- 历史基础表参考；生产完整结构以 src/main/resources/db/migrations 下不可变版本为准。
 -- Mio 数据库 Schema 定稿(PostgreSQL 16 + pgvector)
 --
 -- 定位:PG 是长期记忆的唯一真相源;本地不落任何记忆数据文件。
