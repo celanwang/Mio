@@ -126,7 +126,7 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 | --- | --- | --- |
 | 1 | 画像注入相关性过滤；事件发布/异步任务接缝；事件幂等键 | ✅ 已完成 |
 | 2 | 画像 Wiki 化：扁平 KV → 按作用域组织的主题页（参考 Karpathy LLM Wiki 模式），提炼器升级为整页改写，顺手产出实体三元组 | ✅ 已完成 |
-| 3 | episodes 向量检索 Lv0（DashScope embedding + 本地内存余弦，服务情景回忆与意图消歧） | ✅ 已完成 |
+| 3 | episodes 向量检索 Lv0（DashScope embedding + PostgreSQL/pgvector 余弦检索，服务情景回忆与意图消歧） | ✅ 已完成 |
 | 4 | 意图识别消费记忆：域先验 + 消歧检索（实体簿接入消费方） | 未开始 |
 | 5+ | 云端中间件：PostgreSQL + pgvector 记忆存储已落地（唯一后端，本地不落记忆文件）；Redis 已部署待接入（短期记忆）；托管向量库 / MQ / 图库留有接缝与量化触发条件，信号出现才接入 | 部分完成 |
 
@@ -167,3 +167,7 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 [运行与验证说明](docs/multi-agent/README.md) 列出入口、离线回归、真实 PostgreSQL 测试及阶段边界。目标级预算现已跨轮持久累计，模型预占和用量结算保留缺失与未结算状态；后台事件调度、全局字段修订和真实模型资格评测仍待后续阶段，当前预览用于单进程运行。
 
 多 Agent 目标支持暂停、恢复与关闭，页面展示累计预算和待核查事项；停止后仍可核查受支持的原操作。统一离线收尾验收运行 `./scripts/eval-postgres.sh`，结果见 `target/evaluation/acceptance.md`。[收尾范围与扩展条件](docs/multi-agent/closure.md) 明确区分工程验收与生产资格。
+
+## 记忆后台任务
+
+原文与画像提炼、情景向量任务同事务登记，后台支持有限重试、检查点恢复和执行代次保护。历史召回按命中 id 回源 PG，补建按分页游标推进。后台调用按 UTC 日预占调用次数和输入字符，缺失用量不视作零费用；画像面板提供只读积压和用量诊断。默认启用记忆后台消费，可用 `MIO_MEMORY_JOBS_ENABLED=false` 暂停而保留任务。配置、升级和恢复步骤见[记忆后台任务说明](docs/memory-background-jobs.md)。

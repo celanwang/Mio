@@ -44,6 +44,8 @@ goal_acceptances 每个目标保存一份带 schemaVersion 的当前条件，确
 
 `JdbcOrchestrationAcceptanceTest` 将用户确认条件接入实际主从 SDK 循环：先查询报价并绑定分析，再确认验收范围，最后单独批准或拒绝创建。确认范围时模型调用、业务写入、意图和待批准卡片均不改变；批准后按关联证据满足条件，拒绝后不产生资源，也不能判为全部满足。主 Agent 通过真实的只读工具读取评估结果。
 
-`node --test scripts/test-goal-acceptance.mjs` 执行实际前端模块，覆盖响应乱序、证据到期、编辑重绘、上下限保留、响应丢失后回读、切换会话、关闭后只读、单位显示和发起操作时撤下旧结论。该入口由 Python 检查集调用，因此完整验收需 Node.js 18+；可通过 MIO_NODE_PROGRAM 指定可执行文件。运行 `./scripts/eval-postgres.sh` 完成六类 PG 套件和全套离线门禁，未提供 PG 或缺少客户端检查运行条件时不能宣称完整通过。
+`node --test scripts/test-goal-acceptance.mjs` 执行实际前端模块，覆盖响应乱序、证据到期、编辑重绘、上下限保留、响应丢失后回读、切换会话、关闭后只读、单位显示和发起操作时撤下旧结论。该入口由 Python 检查集调用，因此完整验收需 Node.js 18+；可通过 MIO_NODE_PROGRAM 指定可执行文件。运行 `./scripts/eval-postgres.sh` 完成八类 PG 套件和全套离线门禁，未提供 PG 或缺少客户端检查运行条件时不能宣称完整通过。
 
 本次不调用付费模型或真实供应商。自然语言意图的自动完备性判断、未接入供应商的履约证据、后台自治和生产资格仍需独立证据，不能从离线成功或 SATISFIED 推导。
+
+记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。

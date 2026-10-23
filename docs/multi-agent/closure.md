@@ -33,7 +33,7 @@
 
 运行 `./scripts/eval-postgres.sh`。脚本使用隔离 PostgreSQL 容器，模型与供应商均为 test double，不需要模型密钥，不联系真实业务。默认单独运行 `./scripts/eval.sh` 时允许缺少 PG，但报告会标记 POSTGRES_REQUIRED，不宣称完整验收。
 
-输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收六类 PG 套件真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
+输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收八类 PG 套件真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
 
 页面的隔离验收覆盖忙碌期间暂停、恢复不自动执行、关闭保留草稿与待核查操作、关闭后核查，以及响应丢失后回读。客户端按控制版本拒绝过期状态，并保留较新的预算版本。测试容器、临时 HTTP 服务和验收页面结束后清理，不增加 .github 流程。
 
@@ -51,3 +51,5 @@
 | 真实模型资格与逐步上线 | 在 mock 业务世界采样真实模型，与单 Agent 对照，按领域、风险和模型路由审查完成率、成本及人工评审 |
 
 这些扩展不能靠打开预览开关或提高固定剧本通过率代替。当前闭环提供继续扩展的状态、证据与控制边界。
+
+记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。

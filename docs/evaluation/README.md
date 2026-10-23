@@ -114,3 +114,5 @@ python3 -m eval.runner promotion --report target/evaluation/report.json --inject
 `./scripts/eval-postgres.sh` 在原设施门禁之后生成 `target/evaluation/acceptance.json` 和 `acceptance.md`。同次运行编号和源码指纹用于排除旧报告；持久化、队列、目标生命周期、记忆一致性、完整前台编排及目标验收 PG 套件必须执行且零跳过。未提供测试库时 `./scripts/eval.sh` 仍可验证本地设施，收尾状态为 POSTGRES_REQUIRED。开始新运行会先清除旧成功结论，未完成不能沿用旧结果。消息幂等、人工画像保护与删除语义见 [记忆一致性说明](../memory-consistency.md)，实际覆盖链路见 [完整编排验收](../multi-agent/orchestration-acceptance.md)与[目标级验收](../multi-agent/goal-acceptance.md)。
 
 OFFLINE_COMPLETE 只说明受控前台工程边界通过本次离线验收。固定剧本仍不能晋升，真实模型、供应商回执覆盖、跨主机与后台自治的资格证据不由该状态推导。操作与扩展边界见 [Multi-Agent 收尾文档](../multi-agent/closure.md)。
+
+记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。

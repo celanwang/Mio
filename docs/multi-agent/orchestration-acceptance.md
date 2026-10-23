@@ -8,4 +8,6 @@
 
 这个套件是完整前台编排路径的工程回归，和原来的 skill-and-permission-simulation 采样器有不同评测目标。固定剧本仍然不证明自由规划能力、跨领域完成率、价格或时延优势。真实模型多次采样、与单 Agent 的相同预算对照、自然语言目标条件的完备性及人工审查仍须另行提供证据。
 
-完整运行仍为 `./scripts/eval-postgres.sh`。收尾门禁包含本套件，连同持久化、队列、目标生命周期、记忆一致性和目标验收六类 PG 套件，要求同次运行且全部零跳过。输出契约说明见 [任务输出契约](result-contracts.md)，条件确认和状态口径见 [目标级验收](goal-acceptance.md)。
+完整运行仍为 `./scripts/eval-postgres.sh`。收尾门禁包含本套件，连同持久化、队列、目标生命周期、记忆一致性和目标验收八类 PG 套件，要求同次运行且全部零跳过。输出契约说明见 [任务输出契约](result-contracts.md)，条件确认和状态口径见 [目标级验收](goal-acceptance.md)。
+
+记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。
