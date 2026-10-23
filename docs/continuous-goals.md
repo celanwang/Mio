@@ -11,6 +11,8 @@
 | 5 | 信息检索与文档助手、文档导入和交付物保存 |
 | 6 | 配置驱动的能力包、准备型远程 Agent 适配 |
 
+六阶段均已交付首版功能，可从对话目标区域直接使用。远程能力采用显式准备协议，供应商履约仍按实际适配证据展示，不以模型报告代替。
+
 后台只执行用户确认的 PREPARE 步骤。写入继续走前台已有权限和批准。准备任务的完成、业务资源的创建、履约状态和目标条件分别展示。每阶段验证关键行为，最后运行一次现有完整离线入口；不以测试数量代替功能。
 
 ## 使用
@@ -42,3 +44,5 @@ GET/PUT /api/goals/{session}/program 管理确认计划；GET /status 查看步�
 唤醒持久保存在 goal_wakeups，用户配置与定时器在 PG 中恢复。准备步骤沿用现有队列、会话租约、预算和任务状态；前台忙碌时延后，不抢占会话。保存状态与唤醒事件在同事务登记，消费者不在数据库事务内调用模型。进程中断的旧激活标记失败，不把已启动任务重新提交。备份恢复维护会关闭已有后台计划并作废待执行/运行中的旧唤醒，需要用户重新确认后台范围。
 
 阶段功能完成后，运行 ./scripts/eval-postgres.sh 做一次整体离线验收；针对功能可使用 ./scripts/eval-postgres.sh -q -Dtest=JdbcGoalProgramsIntegrationTest test。不会连接付费模型或真实业务，远程桥接测试仅使用本机合成 HTTP 服务。
+
+本轮代码 f6c29fa 的整体离线验收：310 项 Java、52 项 Python，零失败、零错误、零跳过，十一个 PG 套件全部执行。状态 OFFLINE_COMPLETE，生产资格 NOT_ESTABLISHED。运行编号 d97df05d-95d3-4f22-a726-7e890b10f8fb；构建 mio-6.0.0.jar 的 SHA-256 为 cf44dcb2806feef918d39a07fe021cb9ee9e7e90271a37863837c01da77209ab。报告位于本地 target/evaluation/acceptance.md 与 acceptance.json。

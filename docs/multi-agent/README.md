@@ -1,3 +1,5 @@
+> 持续目标模块已补充确认计划的后台准备、字段局部修订、资源观测及知识能力，使用入口见 [持续目标执行](../continuous-goals.md)。以下前台接口与权限约束继续适用；后台业务写入仍未开放。
+
 # Multi-Agent 运行时
 
 目标方案：[Iris Multi Agent Design](https://q0kyes8lnt5.feishu.cn/wiki/SVz6w01hui1eKekTFqbcLHEinXg)。主 Agent 通过能力注册表委派任务，领域实例隔离上下文与工具，业务动作仍经确定性权限检查与任务级人工确认。

@@ -34,7 +34,7 @@
 
 运行 `./scripts/eval-postgres.sh`。脚本使用隔离 PostgreSQL 容器，模型与供应商均为 test double，不需要模型密钥，不联系真实业务。默认单独运行 `./scripts/eval.sh` 时允许缺少 PG，但报告会标记 POSTGRES_REQUIRED，不宣称完整验收。
 
-输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收十类 PG 套件（含发布维护、真实备份恢复及前台用量恢复）真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
+输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills、agent-packages 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收十一类 PG 套件（含持续目标与知识工作区）真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
 
 页面的隔离验收覆盖忙碌期间暂停、恢复不自动执行、关闭保留草稿与待核查操作、关闭后核查，以及响应丢失后回读。客户端按控制版本拒绝过期状态，并保留较新的预算版本。测试容器、临时 HTTP 服务和验收页面结束后清理，不增加 .github 流程。
 
@@ -44,7 +44,7 @@
 
 | 扩展 | 开始实现前需要的条件 |
 | --- | --- |
-| 后台自主消费、独立任务续租 | 用户可表达持续执行范围、任务截止时间、账户级预算与通知策略；明确读取成本和中断语义 |
+| 后台业务写入、跨主机持续执行 | 用户可表达持续执行范围、任务截止时间、账户级预算与通知策略；明确读取成本和中断语义 |
 | 字段级意图修订 | 版本化目标字段与授权影响规则，不能仅凭模型判断保留旧批准 |
 | 多供应商业务闭环 | 各供应商的可信回执适配器、稳定资源身份及可核验的未提交/幂等语义 |
 | 跨主机接管 | 供应商草稿、连接、凭据和本地关联回执可迁移，完成混合故障与分区验收 |
@@ -54,3 +54,5 @@
 这些扩展不能靠打开预览开关或提高固定剧本通过率代替。当前闭环提供继续扩展的状态、证据与控制边界。
 
 记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。
+
+已确认准备计划的持久唤醒、有界并行、局部字段修订、资源观测、文档工作区和能力包见[持续目标模块](../continuous-goals.md)。用户恢复 ACTIVE 后，仍启用的确认计划可以继续准备；原来中断的已启动任务仍不重放。
