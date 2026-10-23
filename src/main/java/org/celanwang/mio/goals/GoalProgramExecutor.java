@@ -8,6 +8,8 @@ import java.util.*;
 public final class GoalProgramExecutor {
     private final JdbcGoalPrograms programs;private final JdbcGoalWakeups wakeups;private final TaskRuntime runtime;private final ExecutionLeaseStore leases;private final GoalBudgetStore budgets;private final AgentRegistry registry;
     private final RunBudget.Limits limits;private final GoalBudgetStore.Limits goalLimits;
+    private java.util.function.Consumer<String> progress=session->{};
+    public void onProgress(java.util.function.Consumer<String> listener){progress=listener;}
     public GoalProgramExecutor(JdbcGoalPrograms programs,JdbcGoalWakeups wakeups,TaskRuntime runtime,ExecutionLeaseStore leases,GoalBudgetStore budgets,AgentRegistry registry,RunBudget.Limits limits,GoalBudgetStore.Limits goalLimits){this.programs=programs;this.wakeups=wakeups;this.runtime=runtime;this.leases=leases;this.budgets=budgets;this.registry=registry;this.limits=limits;this.goalLimits=goalLimits;}
     public void run(JdbcGoalWakeups.Claim claim){
         ExecutionLeaseStore.Token token;try{token=leases.acquire(claim.session(),Math.min(900000,limits.millis()+5000));}catch(ExecutionLeaseStore.Busy busy){wakeups.busy(claim);return;}
@@ -32,6 +34,7 @@ public final class GoalProgramExecutor {
             }
         }catch(Exception failure){error=failure instanceof RunBudget.BudgetExceeded?"BUDGET_EXHAUSTED":failure instanceof GoalRecord.Stopped?"GOAL_CHANGED":"PREPARATION_STOPPED";}
         finally{try{wakeups.finish(claim,error);}finally{leases.release(token);}}
+        progress.accept(claim.session());
     }
     private TaskRecord executeStep(String session,GoalProgram p,GoalProgram.Step step,Map<String,TaskRecord> completed,RunBudget budget){
         budget.active();var task=runtime.list(session).stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
