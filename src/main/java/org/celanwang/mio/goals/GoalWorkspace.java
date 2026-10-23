@@ -38,6 +38,7 @@ public final class GoalWorkspace {
         }
         if(goal.state()!=GoalRecord.State.ACTIVE)state=goal.state().name();
         boolean unresolved=tasks.stream().anyMatch(TaskRecord::unresolvedEffects);boolean ready=state.equals("READY")&&!unresolved;
+        for(var task:tasks)for(var operation:task.operations())if(operation.outcome()==OperationOutcome.UNKNOWN)actions.add(Map.of("type",runtime.canReconcile(operation)?"RECONCILE":"MANUAL_REVIEW","stepId",task.spec().key(),"taskId",task.id(),"operationId",operation.id(),"text","核查已有操作，不重新提交："+operation.tool()));
         if(unresolved&&state.equals("READY"))state="UNRESOLVED_OPERATION";
         var currentTasks=steps.stream().map(s->tasks.stream().filter(t->t.id().equals(s.get("taskId"))).findFirst().map(t->Map.of("id",t.id(),"revision",t.revision())).orElse(Map.of())).toList();
         var business=resources.list(session);String hash=JsonFingerprint.hash(Map.of("goal",goal.id(),"goalRevision",goal.revision(),"programRevision",p==null?0:p.revision(),"tasks",currentTasks,"resources",business,"state",state));
@@ -52,6 +53,7 @@ public final class GoalWorkspace {
         var existing=jdbc.queryForList("SELECT id,version FROM goal_deliveries WHERE goal_id=? AND source_hash=?",goal.id(),hash);if(!existing.isEmpty())return existing.get(0);
         long version=jdbc.queryForObject("SELECT coalesce(max(version),0)+1 FROM goal_deliveries WHERE goal_id=?",Long.class,goal.id());String id=UUID.randomUUID().toString();var content=new StringBuilder("# 目标准备交付报告\n\n").append(goal.trustedIntent()).append("\n\n状态：").append(view.get("state")).append("\n\n本报告汇总准备工作与证据，不表示订单、支付或履约已完成。\n");
         var progress=(Map<String,Object>)view.get("progress");for(var step:(List<Map<String,Object>>)progress.get("steps"))content.append("\n## ").append(step.get("id")).append(" · ").append(step.get("state")).append("\n\n").append(step.get("reply")).append("\n\n证据评估：").append(encode(step.getOrDefault("assessment",Map.of()))).append("\n");
+        content.append("\n## 用户确认的目标字段、条件与执行范围\n").append(encode(programs.find(goal.id()).orElse(null)));
         content.append("\n## 待处理事项\n").append(encode(view.get("actions"))).append("\n\n## 业务资源与来源\n").append(encode(view.get("resources")));
         jdbc.update("INSERT INTO goal_deliveries(id,goal_id,version,source_hash,content,ready,created_at) VALUES (?,?,?,?,?,?,?)",id,goal.id(),version,hash,content.toString(),view.get("ready"),System.currentTimeMillis());programs.event(goal,"goal_delivery_created",Map.of("delivery",id,"version",version));return Map.of("id",id,"version",version);
     }));}finally{leases.release(token);}}

@@ -57,4 +57,19 @@ class JdbcGoalProgramsIntegrationTest {
         var current=resources.list("s").get(0);assertThat(current.get("state")).isEqualTo("CREATED");resources.report("s","operation",new JdbcBusinessResources.Report(JdbcBusinessResources.State.COMPLETED,"人工在供应商端核实",(String)current.get("observation_id")));
         assertThat(resources.list("s").get(0)).containsEntry("state","COMPLETED").containsEntry("source","USER_REPORTED");assertThat(resources.history("s","operation")).hasSize(2);assertThat(store.task("written").orElseThrow().operations()).containsExactly(operation);
     }
+    GoalWorkspace workspace(){var source=Objects.requireNonNull(jdbc.getDataSource());var resources=new JdbcBusinessResources(jdbc,source,store,new ObjectMapper());resources.initialize();var workspace=new GoalWorkspace(jdbc,source,programs,executor,runtime,resources,new JdbcExecutionLeaseStore(jdbc,source),new ObjectMapper());workspace.initialize();executor.onProgress(workspace::recordProgress);return workspace;}
+    @Test void outcomeWorkspaceProducesVersionedDeliveriesAndRejectsStaleAcknowledgements(){
+        var workspace=workspace();assertThat(workspace.snapshot("s")).containsEntry("state","NO_PLAN");programs.save("s",request(0,"上海"));wakeups.wake("s","run");executor.run(wakeups.claim().orElseThrow());
+        assertThat(workspace.snapshot("s")).containsEntry("state","READY").containsEntry("ready",true);workspace.recordProgress("s");workspace.recordProgress("s");assertThat(jdbc.queryForObject("SELECT count(*) FROM goal_notifications",Long.class)).isEqualTo(1);
+        var delivery=workspace.deliver("s");assertThat(workspace.deliver("s")).isEqualTo(delivery);String id=(String)delivery.get("id");workspace.acknowledge("s",id,1);assertThat(workspace.delivery("s",id).get("acknowledged_at")).isNotNull();
+        programs.save("s",request(1,"杭州"));assertThatThrownBy(()->workspace.acknowledge("s",id,1)).isInstanceOf(IllegalStateException.class);assertThat(workspace.deliver("s").get("version")).isEqualTo(2L);
+        String created=workspace.create("整理导入文档并给出报告");assertThat(runtime.goal(created).trustedIntent()).contains("整理导入文档");
+    }
+    @Test void intentPlannerOnlyStoresAnUnadoptedProposalAndPreservesTheOriginalIntent(){
+        var source=Objects.requireNonNull(jdbc.getDataSource());var budgets=new JdbcGoalBudgetStore(jdbc,source,new ObjectMapper());var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));
+        var model=org.mockito.Mockito.mock(io.agentscope.core.model.Model.class);String plan="{\"fields\":{},\"steps\":[{\"id\":\"research\",\"capabilityId\":\"domain\",\"objective\":\"prepare report\"}]}";
+        org.mockito.Mockito.when(model.stream(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenReturn(reactor.core.publisher.Flux.just(io.agentscope.core.model.ChatResponse.builder().content(List.of(io.agentscope.core.message.TextBlock.builder().text(plan).build())).usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(2).outputTokens(1).build()).build()));
+        new GoalPlanGenerator(model,registry,runtime,programs,new JdbcExecutionLeaseStore(jdbc,source),budgets,new ObjectMapper()).generate("s").block();
+        assertThat(programs.find("g")).isEmpty();assertThat(programs.view("s").get("proposal")).isNotNull();assertThat(runtime.goal("s").trustedIntent()).isEqualTo("prepare");assertThat(budgets.find("g").orElseThrow().models()).isEqualTo(1);assertThat(calls.get()).isZero();
+    }
 }
