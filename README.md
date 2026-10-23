@@ -168,6 +168,8 @@ Agent 技能放在项目根目录的 `skills/` 下（当前为 `skills/mcd-order
 
 多 Agent 目标支持暂停、恢复与关闭，页面展示累计预算和待核查事项；停止后仍可核查受支持的原操作。统一离线收尾验收运行 `./scripts/eval-postgres.sh`，结果见 `target/evaluation/acceptance.md`。[收尾范围与扩展条件](docs/multi-agent/closure.md) 明确区分工程验收与生产资格。
 
+前台模型取消或异常时保留已观察消耗并结算未知；进程中断留下的用量预占由固定批次恢复器按数据库截止时间转为未知，可信晚到完整回报只补差额。调用额度不退回，查询接口保持只读。升级与诊断见[前台模型用量收尾](docs/foreground-usage.md)。
+
 ## 记忆后台任务
 
 原文与画像提炼、情景向量任务同事务登记，后台支持有限重试、检查点恢复和执行代次保护。历史召回按命中 id 回源 PG，补建按分页游标推进。后台调用按 UTC 日预占调用次数和输入字符，缺失用量不视作零费用；画像面板提供只读积压和用量诊断。默认启用记忆后台消费，可用 `MIO_MEMORY_JOBS_ENABLED=false` 暂停而保留任务。配置、升级和恢复步骤见[记忆后台任务说明](docs/memory-background-jobs.md)。

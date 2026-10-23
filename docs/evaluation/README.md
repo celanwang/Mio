@@ -118,3 +118,5 @@ OFFLINE_COMPLETE 只说明受控前台工程边界通过本次离线验收。固
 记忆后台新增作业与用量两个必跑实库套件，使用隔离 PostgreSQL 16 + pgvector；运行及恢复说明见 [记忆后台任务模块](../memory-background-jobs.md)。
 
 发布维护与真实 dump/restore 为第九个必跑实库套件。完整验收还校验带同次运行编号与源码指纹的 6.0.0 JAR 及 SHA-256，拒绝旧包和缺失构建来源，见[发布与维护闭环](../release-maintenance.md)。
+
+前台模型用量收尾新增第十个必跑实库套件，覆盖取消、截止恢复与可信迟到用量补记，不执行真实模型或业务调用，详见[前台模型用量收尾](../foreground-usage.md)。

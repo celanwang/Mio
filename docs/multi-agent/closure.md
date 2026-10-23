@@ -12,6 +12,7 @@
 | 准备队列 | 原子入队/启动、显式领取、启动后不重放、完成确认补记 | JdbcTaskQueueIntegrationTest |
 | 目标生命周期 | 暂停中断执行并作废旧批准；恢复不重跑；关闭保留历史及未知结果 | GoalLifecycleTest、JdbcGoalLifecycleIntegrationTest |
 | 预算与核查 | 累计预算可见、缺失用量不归零、停止后可独立核查原操作 | PersistentBudgetTest、JdbcGoalLifecycleIntegrationTest |
+| 前台用量收尾 | 取消保留下界、过期预占有界恢复、迟到完整用量只补差额 | PersistentBudgetTest、JdbcGoalUsageIntegrationTest |
 | 收尾验收 | 同次运行编号、源码指纹、实库覆盖、固定剧本不能晋升 | eval.acceptance、test_acceptance.py |
 | 目标验收 | 人工确认范围、字段约束、当前证据聚合、未知操作阻止满足 | GoalAcceptanceTest、JdbcGoalAcceptanceIntegrationTest |
 
@@ -33,7 +34,7 @@
 
 运行 `./scripts/eval-postgres.sh`。脚本使用隔离 PostgreSQL 容器，模型与供应商均为 test double，不需要模型密钥，不联系真实业务。默认单独运行 `./scripts/eval.sh` 时允许缺少 PG，但报告会标记 POSTGRES_REQUIRED，不宣称完整验收。
 
-输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收九类 PG 套件（含发布维护及真实备份恢复）真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
+输出位于 target/evaluation/acceptance.json 与 acceptance.md，原有设施指标继续位于 summary.md 及同目录 JSON 文件。每次开始即覆盖旧成功状态为 RUNNING；Java XML、Python 结果与最终报告必须属于同一运行编号。源码指纹包含 src、scripts、eval、skills 和 pom.xml，拒绝用变更前的报告解释变更后的代码。完整结论要求生命周期、队列、持久化、记忆一致性、完整前台编排及目标验收十类 PG 套件（含发布维护、真实备份恢复及前台用量恢复）真实执行且零跳过；报告始终将生产资格标为 NOT_ESTABLISHED。证据边界见 [任务输出契约](result-contracts.md)、[完整编排验收](orchestration-acceptance.md)与[目标级验收](goal-acceptance.md)。完整客户端检查需要 Node.js 18+。
 
 页面的隔离验收覆盖忙碌期间暂停、恢复不自动执行、关闭保留草稿与待核查操作、关闭后核查，以及响应丢失后回读。客户端按控制版本拒绝过期状态，并保留较新的预算版本。测试容器、临时 HTTP 服务和验收页面结束后清理，不增加 .github 流程。
 

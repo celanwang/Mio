@@ -44,7 +44,7 @@
 
 `./scripts/eval-postgres.sh` 创建带 mio.evaluation=true 标签且只绑定回环地址的临时 PostgreSQL 16 + pgvector 容器，完成后删除容器。维护测试只在明确的测试库随机 schema 中运行，真实 dump/restore 用例另建随机数据库；临时备份文件在 finally 中清理。用例验证未来旧租约、未知操作和账号占位、旧审批失效、未启动队列、两套用量账本，以及原文、人工画像/删除标记、向量和结果检查点。另测陈旧预览、并发重试和审计失败回滚。
 
-完整验收要求九个 PG 套件执行且零跳过，含真实 dump/restore 用例。仅配置 MIO_TEST_PG_URL 而没有脚本持有的容器身份时，恢复用例跳过，不能得到 OFFLINE_COMPLETE。单独运行 `./scripts/eval.sh` 允许缺数据库，状态保持 POSTGRES_REQUIRED。
+完整验收要求十个 PG 套件执行且零跳过，含真实 dump/restore 及前台模型用量恢复。仅配置 MIO_TEST_PG_URL 而没有脚本持有的容器身份时，恢复用例跳过，不能得到 OFFLINE_COMPLETE。单独运行 `./scripts/eval.sh` 允许缺数据库，状态保持 POSTGRES_REQUIRED。
 
 验收开始生成新的运行编号、Git revision 与源码指纹。Maven build-info 将这些信息、6.0.0 和 Java 17 编译目标写入 JAR 的 META-INF/build-info.properties。target/evaluation/release.json 记录产物路径及 SHA-256；acceptance.json 将产物、同次 Java/Python 报告和源码指纹绑定。替换 JAR、混入旧构建元数据或缺少产物证据均不能完成验收。普通 Maven 构建的来源默认 unverified，不自行获得验收资格。Git revision 提供历史定位，源码指纹才覆盖构建时实际代码，不能仅凭 revision 推断工作区无修改。发布时应一并保留 JAR、release.json 和验收报告。
 
