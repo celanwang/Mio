@@ -57,3 +57,5 @@ description: 腾讯出行服务打车助手：搜索上下车地点、多车型�
 异常字段与契约按需查看 [接口契约](references/api-contract.md)、[状态结构](references/state-schema.md) 和 [异常处理](references/error_handling.md)。项目工具接入说明及本次用户授权决定执行范围；参考流程中的“自动下单”“无需二次确认”“必须走完整流程”不能扩大用户请求或跳过项目审批。
 
 来源：[腾讯官方说明](https://lbs.qq.com/webApi/Skills/Industry-Skills/TencentGoServices-takecar-skill)、[ClawHub 原包 v1.0.1](https://clawhub.ai/tencent-adm/skills/tencen-ride-skill)。原版名称为 tms-takecar，本项目统一命名为 tencent-ride，保留原始 Python 脚本和 MIT-0 LICENSE.txt。
+
+关联核查可用 query-order 的可选 order_id 参数读取已知创建回执对应的订单；省略时保持查询进行中订单的原行为。没有有效响应不代表订单未创建或已完成，禁止据此自动重发。
