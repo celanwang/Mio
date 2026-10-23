@@ -74,6 +74,9 @@ public class MultiAgentConfig {
     @Bean GoalLifecycle goalLifecycle(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,JdbcTaskQueue queue){return new JdbcGoalLifecycle(jdbc,source,store,queue);}
     @Bean JdbcGoalBudgetStore goalBudgetStore(JdbcTemplate jdbc,DataSource source,ObjectMapper json){return new JdbcGoalBudgetStore(jdbc,source,json);}
     @Bean GoalUsageRecovery goalUsageRecovery(JdbcGoalBudgetStore budgets){return new GoalUsageRecovery(budgets);}
+    @Bean org.celanwang.mio.goals.JdbcGoalPrograms goalPrograms(JdbcTemplate jdbc,DataSource source,ObjectMapper json,JdbcCoordinationStore store,AgentRegistry registry){return new org.celanwang.mio.goals.JdbcGoalPrograms(jdbc,source,json,store,registry);}
+    @Bean @Order(Ordered.HIGHEST_PRECEDENCE+2)
+    ApplicationRunner goalProgramSchema(org.celanwang.mio.goals.JdbcGoalPrograms programs){return args->programs.initialize();}
     @Bean JdbcGoalAcceptance goalAcceptance(JdbcTemplate jdbc,DataSource source,JdbcCoordinationStore store,AgentRegistry registry,ObjectMapper json){return new JdbcGoalAcceptance(jdbc,source,store,registry,json,Clock.systemUTC());}
     @Bean @Order(Ordered.HIGHEST_PRECEDENCE+1)
     ApplicationRunner coordinationSchema(JdbcCoordinationStore store,JdbcAgentStateStore states,JdbcGoalBudgetStore budgets,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue,JdbcGoalAcceptance acceptance){return args->{store.initialize();states.initialize();budgets.initialize();leases.initialize();queue.initialize();acceptance.initialize();};}
@@ -90,8 +93,8 @@ public class MultiAgentConfig {
                                   @Value("${app.multi-agent.max-tasks:16}")int maxTasks,List<OperationReconciler> reconcilers,List<FactExtractor> factExtractors,JdbcExecutionLeaseStore leases,JdbcTaskQueue queue){
         return new TaskRuntime(store,registry,factory,policy,Clock.systemUTC(),maxTasks,verifiers,reconcilers,factExtractors,leases,queue);
     }
-    @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json,JdbcGoalAcceptance acceptance){
-        return new SupervisorFactory(model,states,registry,runtime,json,acceptance);
+    @Bean SupervisorFactory supervisorFactory(Model model,JdbcAgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json,JdbcGoalAcceptance acceptance,org.celanwang.mio.goals.JdbcGoalPrograms programs){
+        return new SupervisorFactory(model,states,registry,runtime,json,acceptance).withPrograms(programs);
     }
     @Bean MultiAgentChatService multiAgentChatService(SupervisorFactory factory,TaskRuntime runtime,AgentRegistry registry,
             @Value("${app.multi-agent.max-model-calls:40}")int models,@Value("${app.multi-agent.max-tool-calls:80}")int tools,

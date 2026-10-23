@@ -297,6 +297,7 @@ function renderGoal() {
   const goal=chat.goal, labels={ACTIVE:'进行中',PAUSED:'已暂停',CLOSED:'已关闭'}, row=el('div','goal-row');
   row.append(el('strong','','目标'+labels[goal.state]+' · 执行 '+goal.running+' · 排队 '+goal.queued+' · 失败 '+goal.failed+' · 失效 '+goal.invalidated+' · 补问 '+goal.questions+' · 待确认 '+goal.approvals+' · 待核查 '+goal.unresolved));
   const actions=el('div','goal-actions');
+  const workspace=el('a','quiet','持续目标');workspace.href='goals.html?session='+encodeURIComponent(chat.sessionId);workspace.target='_blank';workspace.rel='noopener';actions.append(workspace);
   for(const [state,label] of (goal.state==='ACTIVE'?[['PAUSED','暂停目标'],['CLOSED','关闭目标']]:goal.state==='PAUSED'?[['ACTIVE','恢复目标'],['CLOSED','关闭目标']]:[])) {
     const button=el('button','quiet',label);button.type='button';button.disabled=goalControlBusy;button.onclick=()=>changeGoal(state);actions.append(button);
   }

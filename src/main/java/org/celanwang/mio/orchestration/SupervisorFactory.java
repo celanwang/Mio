@@ -13,6 +13,8 @@ public final class SupervisorFactory {
     private final Model model;private final AgentStateStore states;private final AgentRegistry registry;
     private final TaskRuntime runtime;private final ObjectMapper json;
     private final JdbcGoalAcceptance acceptance;
+    private org.celanwang.mio.goals.JdbcGoalPrograms programs;
+    public SupervisorFactory withPrograms(org.celanwang.mio.goals.JdbcGoalPrograms programs){this.programs=programs;return this;}
     public SupervisorFactory(Model model,AgentStateStore states,AgentRegistry registry,TaskRuntime runtime,ObjectMapper json){
         this(model,states,registry,runtime,json,null);
     }
@@ -26,11 +28,13 @@ public final class SupervisorFactory {
         for(String name:java.util.List.of("discover_agents","delegate_task","list_tasks","continue_task","cancel_task","reconcile_operation","review_plan","run_queued_task"))
             toolkit.registerAgentTool(new OrchestrationTool(name,session,runtime,registry,budget,json));
         if(acceptance!=null)toolkit.registerAgentTool(new OrchestrationTool("read_goal_acceptance",session,runtime,registry,budget,json,acceptance));
+        if(programs!=null)toolkit.registerAgentTool(new org.celanwang.mio.goals.GoalProgramTool(programs,session,budget,json));
         return ReActAgent.builder().name("Mio 主助手").model(new BudgetedModel(model,budget)).toolkit(toolkit).stateStore(FencedAgentStateStore.scope(states,budget,session+":supervisor"))
                 .permissionContext(PermissionContextState.builder().mode(PermissionMode.DEFAULT).build())
                 .hook(new UntrustedContentHook()).maxIters(12).generateOptions(GenerateOptions.builder().maxTokens(2048).build())
                 .sysPrompt("""
                         你是面向用户目标的主 Agent。理解目标、成功条件、时间、预算与禁区，发现能力后动态委派合适任务。
+                        用户需要跨轮、定时或多步骤推进时，可用 propose_goal_program 提出准备计划并提示打开持续目标页面确认。字段、能力和步骤来自实际用户目标，不能添加无关业务。建议不等于用户采用，不声称后台已启动。
                         你没有业务工具；具体查询与操作由已注册领域 Agent 处理。普通聊天直接回答，不必创建任务。
                         discover_agents 返回 capability 和 availability，使用 capability.id 委派。UNAVAILABLE 不委派；PREPARATION_REQUIRED 先完成准备；UNKNOWN 不能说成业务已就绪。
                         本地观测不是供应商健康或额度保证。不要通过反复调用探测可用性，不要求用户在对话中发送凭据。

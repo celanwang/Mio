@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mio · 持续目标</title>
+<style>body{font:15px system-ui;background:#f5f6f8;color:#243047;max-width:1000px;margin:30px auto;padding:0 20px}section{background:white;border:1px solid #ddd;border-radius:12px;padding:20px;margin:16px 0}input,textarea,select,button{font:inherit;padding:8px;border:1px solid #bbc4d2;border-radius:6px}textarea{width:95%;min-height:90px}button{cursor:pointer;background:#fff;margin:5px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.muted{color:#667085}pre{white-space:pre-wrap;word-break:break-word}label{display:inline-block;margin:6px}#notice{color:#a22}.step{border-top:1px solid #eee;padding:12px 0}a{color:#365dc5}</style>
+<h1>持续目标</h1><p class="muted">维护目标字段与准备步骤。后台推进不会批准订单、支付或发布内容。</p><div id="notice" role="status"></div>
+<section><div class="row"><label>会话 <input id="session"></label><button id="load">读取目标</button><a href="index.html">返回对话</a></div><p id="intent"></p><div id="policy"></div></section>
+<section><h2>目标字段</h2><div id="fields"></div><button id="add-field">新增字段</button><h2>准备步骤</h2><div id="steps"></div><button id="add-step">新增步骤</button><div><button id="save">保存并确认范围</button><button id="proposal" hidden>载入模型建议供确认</button></div></section>
+<section><h2>执行进度</h2><div class="row"><button id="wake">推进一次</button><button id="refresh">刷新</button></div><div id="progress"></div></section>
+<script src="goals.js"></script></html>
