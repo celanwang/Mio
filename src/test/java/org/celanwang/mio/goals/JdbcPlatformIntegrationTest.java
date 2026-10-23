@@ -18,7 +18,7 @@ class JdbcPlatformIntegrationTest {
     @BeforeEach void init(){String url=System.getenv("MIO_TEST_PG_URL"),user=System.getenv().getOrDefault("MIO_TEST_PG_USERNAME","postgres"),password=System.getenv().getOrDefault("MIO_TEST_PG_PASSWORD","");admin=new JdbcTemplate(new DriverManagerDataSource(url,user,password));schema="mio_platform_"+UUID.randomUUID().toString().replace("-","");admin.execute("CREATE SCHEMA "+schema);source=new DriverManagerDataSource(url+(url.contains("?")?"&":"?")+"currentSchema="+schema+",public",user,password);jdbc=new JdbcTemplate(source);new SchemaMigrations(jdbc,source).migrate();store=new JdbcCoordinationStore(jdbc,source,json);store.createGoal(new GoalRecord("g","s",1,"original","original",1,1));}
     @AfterEach void close(){if(admin!=null)admin.execute("DROP SCHEMA "+schema+" CASCADE");}
     @Test void unifiedMigrationsAreRepeatableAndContextRenewalRetainsUsageAndOriginals(){
-        new SchemaMigrations(jdbc,source).migrate();assertThat(jdbc.queryForObject("SELECT count(*) FROM schema_migrations",Long.class)).isEqualTo(2);
+        new SchemaMigrations(jdbc,source).migrate();assertThat(jdbc.queryForObject("SELECT count(*) FROM schema_migrations",Long.class)).isEqualTo(3);
         var budgets=new JdbcGoalBudgetStore(jdbc,source,json);budgets.open("g",new GoalBudgetStore.Limits(20,20,20,100));String call=budgets.reserve("g",GoalBudgetStore.Kind.MODEL);budgets.settle("g",call,3L,true);var before=budgets.find("g").orElseThrow();
         var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));var programs=new JdbcGoalPrograms(jdbc,source,json,store,registry);
         programs.save("s",new GoalProgram.Request(0,1,Map.of(),List.of(),new GoalProgram.Policy(false,System.currentTimeMillis()+100000,5,60,1,Set.of("domain"))));var continuity=new GoalContinuity(jdbc,source,store,programs,new JdbcExecutionLeaseStore(jdbc,source),json);
@@ -40,5 +40,23 @@ class JdbcPlatformIntegrationTest {
     @Test void forgettingAnEpisodeCannotBeUndoneBySdkHistoryReplay(){
         var jobs=new JdbcMemoryJobs(jdbc,source,3,120000,1);var episode=new EpisodeStore.Episode("forget","s",1,"user","private text");jobs.append(episode,true,true);String hash=jdbc.queryForObject("SELECT md5(text) FROM messages WHERE id='forget'",String.class);
         new org.celanwang.mio.controller.MemoryRetentionController(jdbc,source).forget("forget","s",hash);assertThat(jobs.append(episode,true,true)).isEqualTo(EpisodeStore.AppendResult.EXISTING);assertThat(jdbc.queryForObject("SELECT count(*) FROM messages WHERE id='forget'",Long.class)).isZero();
+    }
+    @Test void indexingResumesInBatchesAndPausedWorkerCannotPublish() {
+        var embedding=mock(EmbeddingClient.class);when(embedding.available()).thenReturn(true);when(embedding.namespace()).thenReturn("test-model");
+        float[] vector=new float[1024];vector[0]=1;
+        var docs=new JdbcDocuments(jdbc,source,store).withKnowledge(embedding,mock(MemoryCallBudget.class));
+        docs.save("indexed",new JdbcDocuments.Save("long","evidence ".repeat(3000),0),null);
+        var jobs=new DocumentIndexJobs(jdbc,source,docs);jobs.start("indexed",1);
+        var stale=jobs.claim().orElseThrow();
+        when(embedding.embed(anyList())).thenAnswer(call->{jobs.pause("indexed",stale.id());return Optional.of(Collections.nCopies(((List<?>)call.getArgument(0)).size(),vector));});
+        jobs.run(stale);assertThat(jobs.status("indexed").get(0)).containsEntry("state","PAUSED").containsEntry("indexed",0L);
+        doAnswer(call->Optional.of(Collections.nCopies(((List<?>)call.getArgument(0)).size(),vector))).when(embedding).embed(anyList());
+        jobs.start("indexed",1);jobs.run(jobs.claim().orElseThrow());
+        assertThat(jobs.status("indexed").get(0)).containsEntry("state","QUEUED").containsEntry("indexed",16L);
+        jdbc.update("UPDATE document_index_jobs SET next_at=0");jobs.run(jobs.claim().orElseThrow());assertThat(jobs.status("indexed").get(0)).containsEntry("state","COMPLETED");
+        assertThat(docs.citation("indexed",1,0,8,"evidence")).containsEntry("verified",true);
+        assertThatThrownBy(()->docs.citation("indexed",1,0,8,"wrong")).isInstanceOf(IllegalArgumentException.class);
+        jobs.start("indexed",1);var old=jobs.claim().orElseThrow();docs.save("indexed",new JdbcDocuments.Save("new","new source",1),null);jobs.run(old);
+        assertThat(jobs.status("indexed").get(0)).containsEntry("state","CANCELLED");
     }
 }

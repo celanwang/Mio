@@ -20,7 +20,7 @@ public final class JdbcMaintenance {
     public record Plan(int schemaVersion, Operation operation, String target, String digest, Map<String,Long> affected) {}
     private static final List<String> TABLES = List.of("execution_leases", "goals", "tasks", "task_queue",
             "goal_budgets", "budget_calls", "memory_jobs", "memory_usage_days", "memory_usage_calls", "operation_claims");
-    private static final List<String> OPTIONAL_TABLES=List.of("goal_programs","goal_proposals","goal_wakeups","goal_resources","resource_observations","workspace_documents","goal_notifications","goal_deliveries","goal_windows","goal_context_archives","document_chunks","episode_vectors","resource_watches","schema_migrations","forgotten_episodes");
+    private static final List<String> OPTIONAL_TABLES=List.of("goal_programs","goal_proposals","goal_wakeups","goal_resources","resource_observations","workspace_documents","goal_notifications","goal_deliveries","goal_windows","goal_context_archives","document_chunks","episode_vectors","resource_watches","schema_migrations","forgotten_episodes","document_index_jobs");
     private List<String> tables(){var result=new ArrayList<>(TABLES);for(String table:OPTIONAL_TABLES)if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass(?) IS NOT NULL",Boolean.class,table)))result.add(table);return result;}
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
@@ -103,6 +103,7 @@ public final class JdbcMaintenance {
     }
 
     private void recover(long now) {
+        if(tables().contains("document_index_jobs"))jdbc.update("UPDATE document_index_jobs SET state='PAUSED',lease_token=NULL,lease_until=0,last_error='RESTORE_STOPPED' WHERE state IN ('QUEUED','RUNNING')");
         if(tables().contains("goal_wakeups"))jdbc.update("UPDATE goal_wakeups SET state='FAILED',owner=NULL,lease_until=0,error_code='RESTORE_STOPPED' WHERE state IN ('READY','RUNNING')");
         if(tables().contains("goal_programs"))jdbc.update("UPDATE goal_programs SET revision=revision+1,content=jsonb_set(jsonb_set(content::jsonb,'{policy,enabled}','false'::jsonb),'{revision}',to_jsonb(revision+1))::text WHERE (content::jsonb->'policy'->>'enabled')::boolean=true");
         // Pause goals without touching user intent, acceptance conditions, receipts or account claims.
