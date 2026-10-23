@@ -76,6 +76,11 @@ public final class TaskRuntime {
     public List<TaskRecord> list(String session){return store.tasks(session).stream().map(this::refreshValidity).map(this::recoverInterrupted).map(t->{
         if(queue!=null&&t.spec().dispatch()==TaskSpec.Dispatch.QUEUED)queue.sync(t.id());return t;
     }).toList();}
+    /** Current-plan lookup avoids scanning archived generations; no queue recovery during UI polling. */
+    public List<TaskRecord> planTasks(String session,long goalRevision,Set<String> keys){return store.tasksForKeys(session,goalRevision,keys).stream().map(this::refreshValidity).toList();}
+    public Optional<TaskRecord> plannedTask(String session,long goalRevision,String key){return store.tasksForKeys(session,goalRevision,Set.of(key)).stream().map(this::refreshValidity).map(this::recoverInterrupted).findFirst();}
+    public List<TaskRecord> unresolvedTasks(String session){return store.unresolvedTasks(session);}
+    public List<TaskRecord> tasksByIds(String session,Set<String> ids){return store.tasksByIds(session,ids);}
     public TaskSummary summary(TaskRecord task){return TaskSummary.of(task,registry,queue==null||task.spec().dispatch()!=TaskSpec.Dispatch.QUEUED?null:
             TaskQueue.View.of(queue.find(task.id()).orElseThrow(()->new IllegalStateException("排队任务缺少队列记录"))))
             .withReconcilable(task.status()==TaskStatus.RUNNING?List.of():task.operations().stream().filter(op->op.outcome()==OperationOutcome.UNKNOWN).filter(op->reconcilers.stream().anyMatch(r->r.supports(op))).map(OperationRecord::id).toList());}

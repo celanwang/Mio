@@ -27,7 +27,10 @@ public record GoalProgram(String goalId,long goalRevision,long revision,Map<Stri
                 throw new IllegalArgumentException("执行范围、期限或额度无效");
         }
     }
-    public record Request(long expectedRevision,long expectedGoalRevision,Map<String,String> fields,List<Step> steps,Policy policy){}
+    public record Request(long expectedRevision,long expectedGoalRevision,Map<String,String> fields,List<Step> steps,Policy policy,Set<String> refreshSteps,String evidenceHash){
+        public Request(long expectedRevision,long expectedGoalRevision,Map<String,String> fields,List<Step> steps,Policy policy){this(expectedRevision,expectedGoalRevision,fields,steps,policy,Set.of(),null);}
+        public Request{refreshSteps=refreshSteps==null?Set.of():Set.copyOf(refreshSteps);if(refreshSteps.size()>12)throw new IllegalArgumentException("刷新步骤过多");}
+    }
     public GoalProgram{
         fields=Map.copyOf(fields);steps=List.copyOf(steps);generations=Map.copyOf(generations);
         if(fields.size()>20||steps.size()>12||goalRevision<1||revision<1||policy==null)throw new IllegalArgumentException("目标计划过大或缺少执行范围");

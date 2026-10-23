@@ -58,6 +58,18 @@ public final class JdbcCoordinationStore implements CoordinationStore {
     @Override public List<TaskRecord> tasks(String session) {
         return jdbc.query("SELECT content FROM tasks WHERE session_id = ? ORDER BY id",(rs,n)->decode(rs.getString(1),TaskRecord.class),session);
     }
+    @Override public List<TaskRecord> tasksForKeys(String session,long goalRevision,Set<String> keys) {
+        if(keys.isEmpty())return List.of();
+        var args=new ArrayList<Object>();args.add(session);args.add(goalRevision);args.addAll(keys);
+        return jdbc.query("SELECT content FROM tasks WHERE session_id=? AND goal_revision=? AND task_key IN ("+String.join(",",Collections.nCopies(keys.size(),"?"))+") ORDER BY id",(rs,n)->decode(rs.getString(1),TaskRecord.class),args.toArray());
+    }
+    @Override public List<TaskRecord> unresolvedTasks(String session) {
+        return jdbc.query("SELECT content FROM tasks WHERE session_id=? AND content::jsonb->>'effectStarted'='true' AND (jsonb_array_length(coalesce(content::jsonb->'operations','[]'::jsonb))=0 OR EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(content::jsonb->'operations','[]'::jsonb)) o WHERE o->>'outcome'='UNKNOWN')) ORDER BY id",(rs,n)->decode(rs.getString(1),TaskRecord.class),session).stream().filter(TaskRecord::unresolvedEffects).toList();
+    }
+    @Override public List<TaskRecord> tasksByIds(String session,Set<String> ids) {
+        if(ids.isEmpty())return List.of();var args=new ArrayList<Object>();args.add(session);args.addAll(ids);
+        return jdbc.query("SELECT content FROM tasks WHERE session_id=? AND id IN ("+String.join(",",Collections.nCopies(ids.size(),"?"))+") ORDER BY id",(rs,n)->decode(rs.getString(1),TaskRecord.class),args.toArray());
+    }
     @Override public long activeTaskCount(String session){return jdbc.queryForObject("SELECT count(*) FROM tasks WHERE session_id=? AND content::jsonb->>'status' NOT IN ('COMPLETED','FAILED','CANCELLED','STALE','UNKNOWN')",Long.class,session);}
     @Override public Optional<TaskRecord> task(String id) {
         return jdbc.query("SELECT content FROM tasks WHERE id = ?",(rs,n)->decode(rs.getString(1),TaskRecord.class),id).stream().findFirst();

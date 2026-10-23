@@ -72,4 +72,26 @@ class JdbcGoalProgramsIntegrationTest {
         new GoalPlanGenerator(model,registry,runtime,programs,new JdbcExecutionLeaseStore(jdbc,source),budgets,new ObjectMapper()).generate("s").block();
         assertThat(programs.find("g")).isEmpty();assertThat(programs.view("s").get("proposal")).isNotNull();assertThat(runtime.goal("s").trustedIntent()).isEqualTo("prepare");assertThat(budgets.find("g").orElseThrow().models()).isEqualTo(1);assertThat(calls.get()).isZero();
     }
+    @Test void evidencePlanningPreservesUnchangedWorkAndRejectsStaleProposals() throws Exception {
+        var first=programs.save("s",request(0,"上海"));wakeups.wake("s","prepare");executor.run(wakeups.claim().orElseThrow());
+        var source=Objects.requireNonNull(jdbc.getDataSource());var json=new ObjectMapper();
+        var registry=new AgentRegistry(List.of(new AgentCapability("domain","domain","domain","s","v1",List.of())));
+        var model=org.mockito.Mockito.mock(io.agentscope.core.model.Model.class);
+        var modified=new GoalProgram.Step("route","domain","research alternative route",List.of("place"),List.of(),"report",List.of());
+        String patch=json.writeValueAsString(Map.of("fieldChanges",Map.of(),"upsertSteps",List.of(modified),"removeSteps",List.of(),"retrySteps",List.of()));
+        org.mockito.Mockito.when(model.stream(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenAnswer(call->{
+            assertThat(json.writeValueAsString(call.getArgument(0))).contains("prepared","assessment","actualUserIntent");
+            return reactor.core.publisher.Flux.just(io.agentscope.core.model.ChatResponse.builder().content(List.of(io.agentscope.core.message.TextBlock.builder().text(patch).build())).usage(io.agentscope.core.model.ChatUsage.builder().inputTokens(2).outputTokens(1).build()).build());
+        });
+        var planner=new GoalPlanGenerator(model,registry,runtime,programs,new JdbcExecutionLeaseStore(jdbc,source),new JdbcGoalBudgetStore(jdbc,source,json),json);
+        planner.generate("s").block();var proposal=(GoalProgram.Request)programs.view("s").get("proposal");
+        assertThat(proposal.steps()).hasSize(3);assertThat(programs.preview("s",proposal).toString()).contains("RETAINED","REFRESHED","MODIFIED");
+        var changed=programs.save("s",proposal);assertThat(changed.generations()).containsEntry("route",2L).containsEntry("compare",2L).containsEntry("other",1L);
+        wakeups.wake("s","again");executor.run(wakeups.claim().orElseThrow());assertThat(calls.get()).isEqualTo(5);
+        planner.generate("s").block();proposal=(GoalProgram.Request)programs.view("s").get("proposal");
+        var task=store.tasksForKeys("s",1,Set.of(changed.taskKey(changed.steps().get(2)))).get(0);store.saveTask(task,task.invalidate(new TaskInvalidation(TaskInvalidation.Code.FACT_CHANGED,task.id(),task.id(),"","new evidence",System.currentTimeMillis()),System.currentTimeMillis()),"updated_report");
+        var stale=proposal;assertThatThrownBy(()->programs.save("s",stale)).hasMessageContaining("证据");assertThat(programs.view("s").get("proposalReview").toString()).contains("stale=true");
+        var invalid=json.readTree("{\"fieldChanges\":{\"place\":\"elsewhere\"},\"upsertSteps\":[],\"removeSteps\":[],\"retrySteps\":[]}");
+        assertThatThrownBy(()->planner.proposal(invalid,changed,runtime.goal("s"),"hash",true)).hasMessageContaining("不能改写");
+    }
 }

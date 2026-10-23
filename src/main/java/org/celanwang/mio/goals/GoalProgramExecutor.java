@@ -17,7 +17,7 @@ public final class GoalProgramExecutor {
         ExecutionLeaseStore.Token token;try{token=leases.acquire(claim.session(),Math.min(900000,limits.millis()+5000));}catch(ExecutionLeaseStore.Busy busy){wakeups.busy(claim);return;}
         String error="";
         try{
-            var candidate=wakeups.begin(claim);var stale=new HashSet<String>();var history=runtime.list(claim.session());
+            var candidate=wakeups.begin(claim);var stale=new HashSet<String>();var history=tasks(claim.session(),candidate);
             for(var step:candidate.steps())history.stream().filter(t->t.goalRevision()==candidate.goalRevision()&&t.spec().key().equals(candidate.taskKey(step))).filter(t->TaskResultAssessment.current(t,registry,System.currentTimeMillis()).state()==TaskResultAssessment.State.EXPIRED_EVIDENCE).findFirst().ifPresent(t->stale.add(step.id()));
             final var p=stale.isEmpty()?candidate:programs.refresh(claim.session(),candidate.revision(),stale);var goal=runtime.goal(claim.session());var budget=new RunBudget(limits,Clock.systemUTC());budget.bindLease(leases,token);budget.bind(budgets,goal.id(),goalLimits,true);
             budget.bindGoalGuard(()->{var current=runtime.goal(claim.session());current.requireActive();if(current.revision()!=p.goalRevision()||current.controlRevision()!=goal.controlRevision()||programs.find(goal.id()).orElseThrow().revision()!=p.revision()||System.currentTimeMillis()>=p.policy().until())throw new GoalRecord.Stopped();});
@@ -28,7 +28,7 @@ public final class GoalProgramExecutor {
                 var results=reactor.core.publisher.Flux.fromIterable(ready).flatMap(step->reactor.core.publisher.Mono.fromCallable(()->Map.entry(step,executeStep(claim.session(),p,step,parents,budget))).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()),p.policy().parallelism()).collectList().block(Duration.ofMillis(limits.millis()));
                 for(var result:results){remaining.remove(result.getKey());if(ready(result.getKey(),result.getValue()))completed.put(result.getKey().id(),result.getValue());}
             }
-            if(p.policy().trackResources())for(var task:runtime.list(claim.session()))for(var operation:task.operations())if(runtime.canReconcile(operation)&&(resources==null||resources.shouldTrack(operation.id()))){
+            if(p.policy().trackResources())for(var task:resourceTasks(claim.session()))for(var operation:task.operations())if(runtime.canReconcile(operation)&&(resources==null||resources.shouldTrack(operation.id()))){
                 budget.active();runtime.reconcile(claim.session(),task.id(),operation.id(),budget).block(Duration.ofSeconds(30));
             }
             if(completed.size()==p.steps().size()&&!p.policy().trackResources()){
@@ -39,7 +39,7 @@ public final class GoalProgramExecutor {
         progress.accept(claim.session());
     }
     private TaskRecord executeStep(String session,GoalProgram p,GoalProgram.Step step,Map<String,TaskRecord> completed,RunBudget budget){
-        budget.active();var task=runtime.list(session).stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
+        budget.active();var task=runtime.plannedTask(session,p.goalRevision(),p.taskKey(step)).orElse(null);
         if(task==null)task=runtime.submit(session,p.task(step,completed),budget).block(Duration.ofMillis(limits.millis()));
         if(task.status()==TaskStatus.QUEUED)task=runtime.runQueuedTask(session,task.id(),budget).block(Duration.ofMillis(limits.millis()));
         else if(task.status()==TaskStatus.INPUT_READY)task=runtime.continueTask(session,task.id(),budget).block(Duration.ofMillis(limits.millis()));return task;
@@ -49,8 +49,15 @@ public final class GoalProgramExecutor {
         var contract=registry.require(task.spec().capabilityId()).outputContract(task.spec());
         for(var check:step.checks()){var field=contract.fields().stream().filter(f->f.id().equals(check.fieldId())).findFirst().orElse(null);if(field==null)return false;var actual=TaskFacts.validAt(task,System.currentTimeMillis()).stream().filter(f->f.key().equals(field.factKey())).findFirst().map(f->f.value().get(field.valueKey())).orElse(null);try{if(!check.matches(field,actual))return false;}catch(IllegalArgumentException invalid){return false;}}return true;
     }
-    public Map<String,Object> status(String session){
-        var view=programs.view(session);var p=(GoalProgram)view.get("program");if(p==null)return Map.of("steps",List.of());var tasks=runtime.list(session);var steps=new ArrayList<Map<String,Object>>();
+    public List<TaskRecord> tasks(String session,GoalProgram p){return runtime.planTasks(session,p.goalRevision(),p.steps().stream().map(p::taskKey).collect(java.util.stream.Collectors.toSet()));}
+    private List<TaskRecord> resourceTasks(String session){
+        if(resources==null)return runtime.list(session);
+        var selected=new LinkedHashMap<String,TaskRecord>();runtime.unresolvedTasks(session).forEach(t->selected.put(t.id(),t));
+        var ids=resources.list(session).stream().map(r->(String)r.get("task_id")).collect(java.util.stream.Collectors.toSet());runtime.tasksByIds(session,ids).forEach(t->selected.put(t.id(),t));return List.copyOf(selected.values());
+    }
+    public Map<String,Object> status(String session){return status(session,null);}
+    public Map<String,Object> status(String session,List<TaskRecord> selected){
+        var view=programs.view(session);var p=(GoalProgram)view.get("program");if(p==null)return Map.of("steps",List.of());var tasks=selected==null?tasks(session,p):selected;var steps=new ArrayList<Map<String,Object>>();
         for(var step:p.steps()){
             var task=tasks.stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);
             var state=task==null?"WAITING":task.status().name();if(task!=null&&task.status()==TaskStatus.COMPLETED)state=ready(step,task)?task.spec().outputContract().equals("report")?"REPORT_READY":"VERIFIED":"EVIDENCE_OR_CONDITION_MISSING";if(p.goalRevision()!=runtime.goal(session).revision())state="GOAL_CHANGED";var result=new LinkedHashMap<String,Object>();result.put("id",step.id());result.put("state",state);result.put("reply",task==null?"":task.reply());result.put("taskId",task==null?"":task.id());
@@ -59,7 +66,7 @@ public final class GoalProgramExecutor {
         var rows=(List<?>)view.get("runtime");return Map.of("steps",steps,"runtime",rows.isEmpty()?Map.of():rows.get(0),"wakeups",wakeups.recent(p.goalId()),"programRevision",p.revision());
     }
     public List<Map<String,Object>> compare(String session,String fieldId,boolean descending){
-        var goal=runtime.goal(session);var p=programs.find(goal.id()).orElseThrow();if(p.goalRevision()!=goal.revision())throw new IllegalStateException("用户目标已改变，请重新确认计划");var tasks=runtime.list(session);var result=new ArrayList<Map<String,Object>>();
+        var goal=runtime.goal(session);var p=programs.find(goal.id()).orElseThrow();if(p.goalRevision()!=goal.revision())throw new IllegalStateException("用户目标已改变，请重新确认计划");var tasks=tasks(session,p);var result=new ArrayList<Map<String,Object>>();
         for(var step:p.steps()){
             var task=tasks.stream().filter(t->t.goalRevision()==p.goalRevision()&&t.spec().key().equals(p.taskKey(step))).findFirst().orElse(null);if(task==null||!ready(step,task))continue;
             var contract=registry.require(step.capabilityId()).outputContract(task.spec());var field=contract.fields().stream().filter(f->f.id().equals(fieldId)&&f.type()==CapabilityOutputContract.ValueType.NUMBER).findFirst().orElse(null);if(field==null)continue;

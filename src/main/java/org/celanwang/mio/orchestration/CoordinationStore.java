@@ -8,6 +8,9 @@ public interface CoordinationStore {
     void createGoal(GoalRecord goal);
     void saveGoal(GoalRecord expected, GoalRecord next);
     List<TaskRecord> tasks(String sessionId);
+    default List<TaskRecord> tasksForKeys(String session,long goalRevision,Set<String> keys){return tasks(session).stream().filter(t->t.goalRevision()==goalRevision&&keys.contains(t.spec().key())).toList();}
+    default List<TaskRecord> unresolvedTasks(String session){return tasks(session).stream().filter(TaskRecord::unresolvedEffects).toList();}
+    default List<TaskRecord> tasksByIds(String session,Set<String> ids){return tasks(session).stream().filter(t->ids.contains(t.id())).toList();}
     default long activeTaskCount(String session){return tasks(session).stream().filter(t->!t.status().terminal()).count();}
     Optional<TaskRecord> task(String id);
     void createTask(TaskRecord task);

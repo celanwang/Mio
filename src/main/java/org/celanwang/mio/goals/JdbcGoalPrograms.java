@@ -16,10 +16,10 @@ public final class JdbcGoalPrograms {
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_proposals(goal_id TEXT PRIMARY KEY REFERENCES goals(id),content TEXT NOT NULL,created_at BIGINT NOT NULL)");
     }
     public Optional<GoalProgram> find(String goal){return jdbc.query("SELECT content FROM goal_programs WHERE goal_id=?",(r,n)->decode(r.getString(1),GoalProgram.class),goal).stream().findFirst();}
-    public Map<String,Object> view(String session){var goal=store.goal(session).orElseThrow(()->new IllegalArgumentException("请先创建对话目标"));var result=new LinkedHashMap<String,Object>();result.put("goal",goal);result.put("program",find(goal.id()).orElse(null));result.put("proposal",jdbc.query("SELECT content FROM goal_proposals WHERE goal_id=?",(r,n)->decode(r.getString(1),GoalProgram.Request.class),goal.id()).stream().findFirst().orElse(null));result.put("runtime",jdbc.queryForList("SELECT activations,next_at,last_error FROM goal_programs WHERE goal_id=?",goal.id()));return result;}
+    public Map<String,Object> view(String session){var goal=store.goal(session).orElseThrow(()->new IllegalArgumentException("请先创建对话目标"));var result=new LinkedHashMap<String,Object>();result.put("goal",goal);result.put("program",find(goal.id()).orElse(null));var proposal=jdbc.query("SELECT content FROM goal_proposals WHERE goal_id=?",(r,n)->decode(r.getString(1),GoalProgram.Request.class),goal.id()).stream().findFirst().orElse(null);result.put("proposal",proposal);if(proposal!=null)try{result.put("proposalReview",preview(session,proposal));}catch(IllegalStateException|IllegalArgumentException stale){result.put("proposalReview",Map.of("stale",true,"message",stale.getMessage()));}result.put("runtime",jdbc.queryForList("SELECT activations,next_at,last_error FROM goal_programs WHERE goal_id=?",goal.id()));return result;}
     public GoalProgram save(String session,GoalProgram.Request request){return tx.execute(status->{
         var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");if(goal.revision()!=request.expectedGoalRevision())throw new IllegalStateException("用户目标已改变，请刷新计划");
-        var previous=find(goal.id()).orElse(null);long expected=previous==null?0:previous.revision();if(expected!=request.expectedRevision())throw new IllegalStateException("计划已被修改，请刷新");
+        var previous=find(goal.id()).orElse(null);checkBase(goal,previous,request);
         var next=build(goal,previous,request);var affected=new HashSet<String>();
         if(previous!=null)for(var step:previous.steps())if(!Objects.equals(previous.generations().get(step.id()),next.generations().get(step.id())))affected.add(previous.taskKey(step));
         for(var task:store.tasks(session))if(affected.contains(task.spec().key())&&task.invalidation()==null){
@@ -34,7 +34,7 @@ public final class JdbcGoalPrograms {
         long now=System.currentTimeMillis();if(request.policy().until()<=now||request.policy().until()>now+7*86400000L)throw new IllegalArgumentException("执行期限应在未来七天内");
         var fields=new LinkedHashMap<String,GoalProgram.Field>();request.fields().forEach((key,value)->{var old=previous==null?null:previous.fields().get(key);fields.put(key,new GoalProgram.Field(value,old==null?1:old.value().equals(value)?old.revision():old.revision()+1));});
         var changed=new HashSet<String>();if(previous!=null){var names=new HashSet<>(previous.fields().keySet());names.addAll(fields.keySet());for(String name:names)if(!Objects.equals(previous.fields().get(name),fields.get(name)))changed.add(name);}
-        var affected=new HashSet<String>();for(var step:request.steps()){
+        var affected=new HashSet<String>(request.refreshSteps());if(!request.steps().stream().map(GoalProgram.Step::id).collect(java.util.stream.Collectors.toSet()).containsAll(affected))throw new IllegalArgumentException("刷新步骤不存在");for(var step:request.steps()){
             var old=previous==null?null:previous.steps().stream().filter(s->s.id().equals(step.id())).findFirst().orElse(null);
             if(old==null||!old.equals(step)||step.fields().isEmpty()&&!changed.isEmpty()||!Collections.disjoint(step.fields(),changed)||previous.goalRevision()!=goal.revision())affected.add(step.id());
             var bindings=step.inputs().entrySet().stream().map(entry->{var parts=entry.getValue().split("/",2);return new InputBinding(parts[0],parts[1],"planned",entry.getKey());}).toList();
@@ -47,7 +47,38 @@ public final class JdbcGoalPrograms {
         for(var step:request.steps()){long old=previous==null?0:previous.generations().getOrDefault(step.id(),0L);generations.put(step.id(),old==0?1:affected.contains(step.id())?old+1:old);}
         var next=new GoalProgram(goal.id(),goal.revision(),previous==null?1:previous.revision()+1,fields,request.steps(),request.policy(),generations);for(var step:next.steps())next.task(step,List.of());return next;
     }
-    public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();build(goal,find(goal.id()).orElse(null),request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
+    public void propose(String session,GoalProgram.Request request){tx.executeWithoutResult(status->{var goal=lockGoal(session);goal.requireActive();var current=find(goal.id()).orElse(null);checkBase(goal,current,request);build(goal,current,request);jdbc.update("INSERT INTO goal_proposals VALUES (?,?,?) ON CONFLICT(goal_id) DO UPDATE SET content=EXCLUDED.content,created_at=EXCLUDED.created_at",goal.id(),encode(request),System.currentTimeMillis());event(goal,"goal_program_proposed",Map.of("steps",request.steps().size()));});}
+    private void checkBase(GoalRecord goal,GoalProgram current,GoalProgram.Request request){
+        if(goal.revision()!=request.expectedGoalRevision()||(current==null?0:current.revision())!=request.expectedRevision())throw new IllegalStateException("计划或用户目标已改变，请重新生成建议");
+        if(request.evidenceHash()!=null&&!request.evidenceHash().equals(evidenceHash(goal.sessionId(),current)))throw new IllegalStateException("执行证据或资源已改变，请重新生成建议");
+    }
+    public String evidenceHash(String session,GoalProgram program){
+        var keys=program==null?Set.<String>of():program.steps().stream().map(program::taskKey).collect(java.util.stream.Collectors.toSet());
+        long now=System.currentTimeMillis();var tasks=program==null?List.<TaskRecord>of():store.tasksForKeys(session,program.goalRevision(),keys);
+        var summaries=tasks.stream().sorted(Comparator.comparing(TaskRecord::id)).map(t->Map.of("id",t.id(),"revision",t.revision(),"expired",TaskFacts.of(t).stream().anyMatch(f->f.expiresAt()<=now))).toList();
+        var resources=Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass('goal_resources') IS NOT NULL",Boolean.class))?jdbc.queryForList("SELECT r.*,o.id AS observation_id,o.state,o.source,o.evidence,o.observed_at FROM goal_resources r LEFT JOIN LATERAL (SELECT * FROM resource_observations WHERE operation_id=r.operation_id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true WHERE r.goal_id=? ORDER BY r.operation_id",store.goal(session).orElseThrow().id()):List.of();
+        var unknown=store.unresolvedTasks(session).stream().map(t->Map.of("id",t.id(),"revision",t.revision())).toList();
+        return JsonFingerprint.hash(Map.of("tasks",summaries,"resources",resources,"unresolved",unknown));
+    }
+    public Map<String,Object> preview(String session,GoalProgram.Request request){
+        var goal=store.goal(session).orElseThrow();var old=find(goal.id()).orElse(null);checkBase(goal,old,request);var next=build(goal,old,request);var rows=new ArrayList<Map<String,Object>>();
+        for(var step:next.steps()){
+            var prior=old==null?null:old.steps().stream().filter(s->s.id().equals(step.id())).findFirst().orElse(null);
+            String change=prior==null?"ADDED":Objects.equals(old.generations().get(step.id()),next.generations().get(step.id()))?"RETAINED":prior.equals(step)?"REFRESHED":"MODIFIED";
+            rows.add(Map.of("stepId",step.id(),"change",change,"generation",next.generations().get(step.id())));
+        }
+        if(old!=null)for(var step:old.steps())if(next.steps().stream().noneMatch(s->s.id().equals(step.id())))rows.add(Map.of("stepId",step.id(),"change","REMOVED"));
+        var expanded=new ArrayList<String>();if(old==null)expanded.add("首次确认准备计划");else{
+            if(!old.policy().capabilities().containsAll(next.policy().capabilities()))expanded.add("增加能力范围");
+            if(!old.policy().enabled()&&next.policy().enabled())expanded.add("启用后台准备");
+            if(next.policy().until()>old.policy().until()||next.policy().maxActivations()>old.policy().maxActivations()||next.policy().parallelism()>old.policy().parallelism()||next.policy().intervalSeconds()<old.policy().intervalSeconds())expanded.add("扩大期限、额度、频率或并发");
+            if(!old.policy().trackResources()&&next.policy().trackResources())expanded.add("增加资源跟踪");
+        }
+        var fields=new ArrayList<Map<String,Object>>();var names=new TreeSet<>(next.fields().keySet());if(old!=null)names.addAll(old.fields().keySet());
+        for(String name:names){var before=old==null?null:old.fields().get(name);var after=next.fields().get(name);if(!Objects.equals(before,after))fields.add(Map.of("field",name,"before",before==null?"":before.value(),"after",after==null?"":after.value()));}
+        var conditions=new ArrayList<Map<String,Object>>();for(var step:next.steps()){var prior=old==null?null:old.steps().stream().filter(s->s.id().equals(step.id())).findFirst().orElse(null);if(prior==null&&!step.checks().isEmpty()||prior!=null&&!prior.checks().equals(step.checks()))conditions.add(Map.of("stepId",step.id(),"before",prior==null?List.of():prior.checks(),"after",step.checks()));}
+        return Map.of("stale",false,"steps",rows,"fieldChanges",fields,"conditionChanges",conditions,"scopeChanges",expanded,"requiresConfirmation",true,"message","仅影响准备计划；原业务操作和未知操作占位保留");
+    }
     public GoalProgram refresh(String session,long expected,Set<String> roots){return tx.execute(status->{
         var goal=lockGoal(session);if(goal.state()==GoalRecord.State.CLOSED)throw new IllegalStateException("目标已关闭");var previous=find(goal.id()).orElseThrow();if(previous.revision()!=expected||previous.goalRevision()!=goal.revision())throw new IllegalStateException("计划或用户目标已更新，请重新确认计划");
         var affected=new HashSet<>(roots);if(affected.isEmpty()||!previous.steps().stream().map(GoalProgram.Step::id).collect(java.util.stream.Collectors.toSet()).containsAll(affected))throw new IllegalArgumentException("请选择现有步骤");
