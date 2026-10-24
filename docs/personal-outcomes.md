@@ -62,7 +62,7 @@ GET/POST /api/workspace/goals/{session}/triggers 读取或确认范围，POST /{
 
 ## 落地验收
 
-选择执行阶段提交912caf1，个人化、领域契约、事件与论据闭环提交ac9c626。代码ac9c626的完整离线入口通过337项 Java、54项 Python，零失败、错误或跳过，12个必需的 PostgreSQL 套件均实际执行。
+选择执行阶段提交912caf1，个人化、领域契约、事件与论据闭环提交ac9c626。界面目标绑定修复1289ade、资源事件去重修复0b8d688。代码0b8d688的完整离线入口通过337项 Java、54项 Python，零失败、错误或跳过，12个必需的 PostgreSQL 套件均实际执行。
 
 | 范围 | 本轮证据 |
 | --- | --- |
@@ -73,6 +73,6 @@ GET/POST /api/workspace/goals/{session}/triggers 读取或确认范围，POST /{
 | 事件触发 | 指定时间、资料到期、资源变化；去重、次数限制、确认范围内刷新、计划变更失效，同状态新回执不重复触发，通知不产生业务调用 |
 | 论据与交付 | 文档精确范围、版本变化与删除，虚构论据拒绝，综合绑定当前来源，旧交付不可当作新结果确认 |
 
-验收运行08647b20-daee-4921-a0a4-6e1c55b1a916，状态OFFLINE_COMPLETE，生产资格NOT_ESTABLISHED。源码指纹6e9b5b149af53e5fd8f4577c05883bf7b46962411c9b94ca3079d6a7e8f765f4；产物target/mio-6.0.0.jar，SHA-256为b16e11bb2058de3253a0c2c30ae29dac5a899f6da1cacf359e100c556aab8f18。原始记录在target/evaluation/acceptance.json、acceptance.md及personal-outcomes-eval.log。
+验收运行c0a97d9e-3892-4a0d-9cfe-a225c04e5059，状态OFFLINE_COMPLETE，生产资格NOT_ESTABLISHED。源码指纹4a7eb1042fb1e457c2c37469262cfc1ccb3bf817e9667a8b4bc3cd2225327106；产物target/mio-6.0.0.jar，SHA-256为bd9e3ff163454608993bfb6284ad5ecdc1a8a6ac85d60ddba492d70cab466795。原始记录在target/evaluation/acceptance.json、acceptance.md及personal-outcomes-eval.log。
 
 餐饮和微博适配仍需真实、脱敏且已核实的接口样本后配置启用；默认关闭示例不代表已验证供应商。此次没有付费模型采样、实际下单或对外发布。
