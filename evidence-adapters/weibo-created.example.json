@@ -1,0 +1,10 @@
+{
+  "id": "weibo-created",
+  "enabled": false,
+  "capabilityId": "weibo-assistant",
+  "tool": "REPLACE_WITH_REGISTERED_WRITE_TOOL",
+  "mode": "WRITE",
+  "description": "关闭的格式示例：工具名、成功条件和路径须按真实微博回执核实",
+  "conditions": {"/success": true},
+  "resourceIdPointer": "/idstr"
+}

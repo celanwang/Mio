@@ -292,7 +292,7 @@ async function profileJson(url) {
 async function loadProfile() {
   const box = document.getElementById('profile');
   const [entries, rules, automations, entities, memoryJobs] = await Promise.all([
-    profileJson('/api/profile'),
+    profileJson('/api/profile/details'),
     profileJson('/api/trust'),
     profileJson('/api/automations'),
     profileJson('/api/entities'),
@@ -311,7 +311,7 @@ async function loadProfile() {
         `<td title="${escapeHtml(content)}">${escapeHtml(preview)}</td>` +
         `<td><span class="src ${e.source}">${SOURCE_LABEL[e.source] || e.source}</span></td>` +
         `<td>${e.confidence.toFixed(2)}</td>` +
-        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.id)}')">删除</button></td></tr>`;
+        `<td><button class="rowbtn" onclick="deleteProfile('${encodeURIComponent(e.id).replace(/'/g, '%27')}',${e.revision})">删除</button></td></tr>`;
     }
     html += '</table>';
   }
@@ -359,9 +359,9 @@ async function loadProfile() {
   box.innerHTML = html;
 }
 
-async function deleteProfile(id) {
+async function deleteProfile(id,revision) {
   try {
-    const response = await fetch('/api/profile?id=' + id, { method: 'DELETE' });
+    const response = await fetch('/api/profile?id=' + id+'&expectedRevision='+revision, { method: 'DELETE' });
     if (!response.ok) throw new Error('画像删除失败');
     await renderProfile();
   } catch (_) { profileError('未能确认删除结果，请刷新核对后重试。'); }

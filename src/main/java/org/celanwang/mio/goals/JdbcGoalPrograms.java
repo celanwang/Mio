@@ -11,6 +11,8 @@ import java.util.*;
 public final class JdbcGoalPrograms {
     private final JdbcTemplate jdbc;private final ObjectMapper json;private final TransactionTemplate tx;private final CoordinationStore store;private final AgentRegistry registry;
     public JdbcGoalPrograms(JdbcTemplate jdbc,DataSource source,ObjectMapper json,CoordinationStore store,AgentRegistry registry){this.jdbc=jdbc;this.json=json;this.store=store;this.registry=registry;tx=new TransactionTemplate(new DataSourceTransactionManager(source));tx.setTimeout(10);}
+    private org.celanwang.mio.memory.PersonalContext personal;
+    public JdbcGoalPrograms withPersonalContext(org.celanwang.mio.memory.PersonalContext personal){this.personal=personal;return this;}
     public void initialize(){
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_programs(goal_id TEXT PRIMARY KEY REFERENCES goals(id),revision BIGINT NOT NULL,content TEXT NOT NULL,activations INTEGER NOT NULL DEFAULT 0,next_at BIGINT NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '')");
         jdbc.execute("CREATE TABLE IF NOT EXISTS goal_proposals(goal_id TEXT PRIMARY KEY REFERENCES goals(id),content TEXT NOT NULL,created_at BIGINT NOT NULL)");
@@ -67,7 +69,8 @@ public final class JdbcGoalPrograms {
         var summaries=tasks.stream().sorted(Comparator.comparing(TaskRecord::id)).map(t->Map.of("id",t.id(),"revision",t.revision(),"expired",TaskFacts.of(t).stream().anyMatch(f->f.expiresAt()<=now))).toList();
         var resources=Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass('goal_resources') IS NOT NULL",Boolean.class))?jdbc.queryForList("SELECT r.*,o.id AS observation_id,o.state,o.source,o.evidence,o.observed_at FROM goal_resources r LEFT JOIN LATERAL (SELECT * FROM resource_observations WHERE operation_id=r.operation_id ORDER BY observed_at DESC,id DESC LIMIT 1) o ON true WHERE r.goal_id=? ORDER BY r.operation_id",store.goal(session).orElseThrow().id()):List.of();
         var unknown=store.unresolvedTasks(session).stream().map(t->Map.of("id",t.id(),"revision",t.revision())).toList();
-        return JsonFingerprint.hash(Map.of("tasks",summaries,"resources",resources,"unresolved",unknown));
+        var feedback=Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass('goal_feedback') IS NOT NULL",Boolean.class))?jdbc.queryForList("SELECT id,kind,comment FROM goal_feedback WHERE goal_id=? ORDER BY created_at DESC,id DESC LIMIT 30",store.goal(session).orElseThrow().id()):List.of();
+        return JsonFingerprint.hash(Map.of("tasks",summaries,"resources",resources,"unresolved",unknown,"feedback",feedback,"preferences",personal==null?Map.of():personal.capture(session,program==null?Set.of():program.steps().stream().map(s->registry.require(s.capabilityId()).skill()).collect(java.util.stream.Collectors.toSet()),store.goal(session).orElseThrow().trustedIntent())));
     }
     public Map<String,Object> preview(String session,GoalProgram.Request request){
         var goal=store.goal(session).orElseThrow();var old=find(goal.id()).orElse(null);checkBase(goal,old,request);var next=build(goal,old,request);var rows=new ArrayList<Map<String,Object>>();

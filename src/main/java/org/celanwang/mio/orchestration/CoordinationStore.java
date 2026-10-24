@@ -17,6 +17,7 @@ public interface CoordinationStore {
     void saveTask(TaskRecord expected, TaskRecord next, String event);
     /** Fence competing submissions and persist the operation before contacting a provider. */
     void startOperation(TaskRecord expected, OperationRecord operation, long now);
+    default void startOperation(TaskRecord expected,OperationRecord operation,long now,Runnable beforeCommit){beforeCommit.run();startOperation(expected,operation,now);}
     /** Re-evaluate the dependency graph while fencing task changes; do not trust a caller-authored cause. */
     TaskRecord invalidateDependencies(String taskId,long now);
     /** Persist invalidation before querying and evidence after return, under the current goal/task fence. */

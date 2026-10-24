@@ -41,3 +41,5 @@ Compose 中 PostgreSQL/Redis 默认只绑定127.0.0.1；Redis 当前未接入，
 ## 上一阶段验收
 
 代码 e6f594f 的完整离线入口通过：316 项 Java、52 项 Python，零失败、错误或跳过，状态 OFFLINE_COMPLETE，生产资格仍为 NOT_ESTABLISHED。平台实库回归覆盖统一迁移、原始上下文归档、额度追加不退还消耗、历史任务不挤占容量、向量模型和原文版本隔离、文档引用更新删除，以及情景删除后历史回放不重建。运行编号 e0bf45a5-4247-4e3f-97b5-74edbdbe6d4b，构建 SHA-256 为 cf91ab7e3d065362c672308adfc1b16cef03912bbe40019f4f998f463d674b74。原始报告在本地 target/evaluation/acceptance.json 和 acceptance.md。
+
+当前进一步增加 V006 至 V009：方案选择反馈、个人化来源与到期、受限事件触发、文档论据引用。人工画像 API 现需当前版本；具体操作与恢复边界见[从个人意图到业务结果](personal-outcomes.md)。

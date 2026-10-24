@@ -27,26 +27,14 @@ public class AutomationStore {
     }
 
     /** 幂等提议：同 toolName 已有任何状态的规则则不再生成。返回新建的规则，未新建返回 null。 */
-    public synchronized AutomationRule propose(String toolName, String title, String reason) {
-        try {
-            Integer exists = jdbc.queryForObject(
-                    "SELECT COUNT(1) FROM automations WHERE tool_name = ?", Integer.class, toolName);
-            if (exists != null && exists > 0) {
-                return null;
-            }
-            AutomationRule rule = new AutomationRule(UUID.randomUUID().toString(), title, toolName,
-                    TRIGGER_SESSION_START, AutomationRule.Status.PROPOSED, reason,
-                    System.currentTimeMillis(), null);
-            jdbc.update("""
-                    INSERT INTO automations(id, title, tool_name, trigger_kind, status, reason, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, rule.id(), rule.title(), rule.toolName(), rule.trigger(),
-                    rule.status().name(), rule.reason(), rule.createdAt());
-            return rule;
-        } catch (Exception e) {
-            log.error("自动化提议写入失败（fail-closed，按未提议处理）：{}", e.getMessage());
-            return null;
-        }
+    public synchronized AutomationRule propose(String toolName,String title,String reason){
+        if(!org.celanwang.mio.config.ToolPolicies.AUTOMATABLE.contains(toolName))return null;
+        try{return transaction().execute(status->{
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtext('mio-automation'),hashtext(?))",Object.class,toolName);
+            if(jdbc.queryForObject("SELECT count(*) FROM automations WHERE tool_name=?",Integer.class,toolName)>0)return null;
+            var rule=new AutomationRule(UUID.randomUUID().toString(),title,toolName,TRIGGER_SESSION_START,AutomationRule.Status.PROPOSED,reason,System.currentTimeMillis(),null);
+            jdbc.update("INSERT INTO automations(id,title,tool_name,trigger_kind,status,reason,created_at) VALUES (?,?,?,?,?,?,?)",rule.id(),rule.title(),rule.toolName(),rule.trigger(),rule.status().name(),rule.reason(),rule.createdAt());audit("automation_proposed",rule.id()+":"+toolName);return rule;
+        });}catch(RuntimeException unavailable){log.error("自动化提议存储暂不可用，未登记提议");return null;}
     }
 
     /** 批准：PROPOSED → ACTIVE。 */
@@ -61,23 +49,11 @@ public class AutomationStore {
 
     /** 吊销：ACTIVE → REJECTED（保留记录，防止习惯检测立即再次提议）。 */
     public AutomationRule revoke(String id) {
-        AutomationRule rule = find(id);
-        if (rule == null || rule.status() != AutomationRule.Status.ACTIVE) {
-            return null;
-        }
-        return decide(id, AutomationRule.Status.REJECTED);
+        return transition(id,AutomationRule.Status.ACTIVE,AutomationRule.Status.REJECTED);
     }
 
-    /** 急停：吊销全部 ACTIVE 自动化规则（ACTIVE → REJECTED），返回吊销数量。 */
     public synchronized int revokeAllActive() {
-        try {
-            return jdbc.update("UPDATE automations SET status = ?, decided_at = ? WHERE status = ?",
-                    AutomationRule.Status.REJECTED.name(), System.currentTimeMillis(),
-                    AutomationRule.Status.ACTIVE.name());
-        } catch (Exception e) {
-            log.error("自动化批量吊销失败（fail-closed）：{}", e.getMessage());
-            return 0;
-        }
+        return transaction().execute(status->{int changed=jdbc.update("UPDATE automations SET status='REJECTED',decided_at=? WHERE status='ACTIVE'",System.currentTimeMillis());if(changed>0)audit("automation_all_revoked", "count="+changed);return changed;});
     }
 
     public List<AutomationRule> rules() {
@@ -119,22 +95,15 @@ public class AutomationStore {
         }
     }
 
-    private AutomationRule decide(String id, AutomationRule.Status status) {
-        AutomationRule old = find(id);
-        if (old == null) {
-            return null;
-        }
-        try {
-            long decidedAt = System.currentTimeMillis();
-            jdbc.update("UPDATE automations SET status = ?, decided_at = ? WHERE id = ?",
-                    status.name(), decidedAt, id);
-            return new AutomationRule(old.id(), old.title(), old.toolName(), old.trigger(),
-                    status, old.reason(), old.createdAt(), decidedAt);
-        } catch (Exception e) {
-            log.error("自动化规则更新失败（fail-closed，按未变更处理）：{}", e.getMessage());
-            return null;
-        }
+    private AutomationRule decide(String id,AutomationRule.Status status){return transition(id,AutomationRule.Status.PROPOSED,status);}
+    private AutomationRule transition(String id,AutomationRule.Status expected,AutomationRule.Status target){
+        return transaction().execute(status->{
+            var rows=jdbc.query("UPDATE automations SET status=?,decided_at=? WHERE id=? AND status=? RETURNING id,title,tool_name,trigger_kind,status,reason,created_at,decided_at",this::mapRow,target.name(),System.currentTimeMillis(),id,expected.name());
+            if(rows.isEmpty())return null;var rule=rows.get(0);audit("automation_state_changed",id+":"+expected+"->"+target);return rule;
+        });
     }
+    private org.springframework.transaction.support.TransactionTemplate transaction(){return new org.springframework.transaction.support.TransactionTemplate(new org.springframework.jdbc.datasource.DataSourceTransactionManager(java.util.Objects.requireNonNull(jdbc.getDataSource())));}
+    private void audit(String type,String detail){jdbc.update("INSERT INTO events(id,ts,session_id,node,type,title,detail) VALUES (?,?, 'automations','human',?,?,?)","automation:"+UUID.randomUUID(),System.currentTimeMillis(),type,type,detail);}
 
     private AutomationRule mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         long decidedAt = rs.getLong("decided_at");

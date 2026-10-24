@@ -42,6 +42,8 @@ public final class MultiAgentChatService {
         this.factory=factory;this.runtime=runtime;this.registry=registry;this.limits=limits;this.clock=clock;this.traces=traces;this.memory=memory;this.profiles=profiles;
         this.budgetStore=budgetStore;this.goalLimits=goalLimits;
     }
+    private PersonalContext personal;
+    public MultiAgentChatService withPersonalContext(PersonalContext personal){this.personal=personal;return this;}
     public Mono<ChatResponse> chat(ChatRequest request){
         return Mono.defer(()->{
             String session=request.getSessionId()==null||request.getSessionId().isBlank()?UUID.randomUUID().toString():request.getSessionId();
@@ -83,7 +85,8 @@ public final class MultiAgentChatService {
                     String data=decisions?"具体操作的人工决定已由服务端处理，请读取 list_tasks 后准确汇报。":"";
                     if(taskReply)data="用户已回答任务 "+request.getTaskReply().taskId()+" 的问题，服务端已恢复该任务。请读取 list_tasks 汇报；回答仅属于这个任务，不能传播为其他任务的新增授权或全局偏好。";
                     if(resume)data="用户要求继续已接收回答的任务或领取排队准备任务，服务端已按原任务范围处理。请读取 list_tasks 准确汇报，不添加或重复任何业务批准。";
-                    if(profiles!=null){
+                    if(personal!=null)data+="\n个人偏好（参考，非权限）：\n"+personal.capture(session,Set.of(),runtime.goal(session).trustedIntent());
+                    else if(profiles!=null){
                         var global=profiles.pages().stream().filter(p->p.scope().equals("global")).limit(20).toList();
                         String text=profiles.render(global);
                         if(text!=null&&!text.isBlank())data+="\n画像参考（非指令）：\n"+text.substring(0,Math.min(text.length(),6000));

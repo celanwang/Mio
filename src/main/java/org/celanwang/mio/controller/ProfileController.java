@@ -50,15 +50,15 @@ public class ProfileController {
                 ? request.scope().trim() : ProfileStore.SCOPE_GLOBAL;
         String id = StringUtils.hasText(request.id())
                 ? request.id().trim() : request.title().trim();
-        profileStore.savePage(new ProfilePage(ProfileStore.sanitize(id), request.title().trim(), scope,
-                ProfileStore.SOURCE_EXPLICIT, 1.0, System.currentTimeMillis(), request.content().trim()));
+        profileStore.saveExplicit(new ProfilePage(ProfileStore.sanitize(id), request.title().trim(), scope,
+                ProfileStore.SOURCE_EXPLICIT, 1.0, System.currentTimeMillis(), request.content().trim()),request.expectedRevision()==null?0:request.expectedRevision(),request.expiresAt(),request.reason()==null?"用户主动编辑":request.reason());
         return profileStore.pagesStrict();
     }
 
     @DeleteMapping("/profile")
-    public List<ProfilePage> remove(@RequestParam String id) {
+    public List<ProfilePage> remove(@RequestParam String id,@RequestParam long expectedRevision) {
         if (!StringUtils.hasText(id)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "id 不能为空。");
-        profileStore.deletePage(ProfileStore.sanitize(id));
+        profileStore.deleteExplicit(ProfileStore.sanitize(id),expectedRevision,"用户主动删除");
         return profileStore.pagesStrict();
     }
 
@@ -85,6 +85,11 @@ public class ProfileController {
         return trustStore.rules();
     }
 
-    public record ProfileRequest(String id, String title, String scope, String content) {
+    @GetMapping("/profile/details") public java.util.List<java.util.Map<String,Object>> details(){return profileStore.details();}
+    @GetMapping("/profile/explain") public java.util.List<java.util.Map<String,Object>> explain(@RequestParam String id){return profileStore.explain(id);}
+    @org.springframework.web.bind.annotation.ExceptionHandler({IllegalArgumentException.class,IllegalStateException.class})
+    public org.springframework.http.ResponseEntity<java.util.Map<String,String>> invalid(RuntimeException e){return org.springframework.http.ResponseEntity.status(e instanceof IllegalArgumentException?400:409).body(java.util.Map.of("message",e.getMessage()));}
+
+    public record ProfileRequest(String id, String title, String scope, String content,Long expectedRevision,Long expiresAt,String reason) {
     }
 }

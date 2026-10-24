@@ -47,3 +47,5 @@ POST /api/goals/{session}/comparisons 保存比较，GET 读取最近10次。请
 三阶段功能已落地。知识阶段提交64cfb76，局部计划与比较阶段提交196e79d，交付和运行阶段随本文件提交。完整离线入口通过325项 Java 和53项 Python，零失败、错误或跳过，含12个必需的隔离 PostgreSQL 套件。网页正文使用本地响应测试，计划和综合使用模拟模型；未联系付费模型或真实业务。
 
 验收运行0d738287-c3bf-4a7b-b7a7-06213f2beb77，状态OFFLINE_COMPLETE，生产资格NOT_ESTABLISHED。运行时 Git 基线为196e79d，包含本次交付阶段的工作区改动，精确源码指纹为d5eef1ae8cc7a671f1d4d423ebff6b787da81a20b25534e317b2f1c04abb3463；产物SHA-256为188d7b69bad824728c23d78720f0bb9776b7dd2db8a907511a0d714f3a8330d8。原始报告在target/evaluation/acceptance.json、acceptance.md。离线通过证明实现及恢复边界，不宣称真实模型的推荐质量、目标完成率或生产成本已验证。
+
+后续综合已细化到服务端论据目录，新增 finding 需具体 referenceIds；同时加入独立执行阶段及反馈，细节见[从个人意图到业务结果](personal-outcomes.md)。旧综合快照保持原范围，不升级成已核验论据。

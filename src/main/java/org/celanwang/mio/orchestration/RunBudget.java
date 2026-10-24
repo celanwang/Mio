@@ -21,6 +21,11 @@ public final class RunBudget {
     private volatile boolean tokenUsageComplete = true;
     private Runnable goalGuard=()->{};
     public void bindGoalGuard(Runnable guard){guard.run();this.goalGuard=java.util.Objects.requireNonNull(guard);}
+    private volatile java.util.function.ToLongFunction<TaskRecord> effectGuard;
+    public synchronized void bindEffectGuard(java.util.function.ToLongFunction<TaskRecord> guard){if(effectGuard!=null)throw new IllegalStateException("业务条件只能绑定一次");effectGuard=java.util.Objects.requireNonNull(guard);}
+    public synchronized void bindDefaultEffectGuard(java.util.function.ToLongFunction<TaskRecord> guard){if(effectGuard==null)effectGuard=java.util.Objects.requireNonNull(guard);}
+    public boolean hasEffectGuard(){return effectGuard!=null;}
+    public long effectConditions(TaskRecord task){active();return effectGuard==null?Long.MAX_VALUE:effectGuard.applyAsLong(task);}
     private ExecutionLeaseStore leases;
     private ExecutionLeaseStore.Token lease;
     public synchronized void bindLease(ExecutionLeaseStore store,ExecutionLeaseStore.Token token){

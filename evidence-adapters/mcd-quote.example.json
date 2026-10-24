@@ -1,0 +1,14 @@
+{
+  "id": "meal-quote",
+  "enabled": false,
+  "capabilityId": "mcd-ordering",
+  "tool": "calculate-price",
+  "mode": "READ",
+  "description": "关闭的格式示例：须按真实算价回执修改，不是当前供应商契约",
+  "factKey": "meal.quote",
+  "factType": "meal_quote",
+  "ttlSeconds": 30,
+  "conditions": {"/success": true, "/currency": "CNY", "/amountUnit": "fen"},
+  "fields": {"payableAmountFen": {"pointer": "/payableAmount", "type": "NUMBER", "unit": "分", "label": "应付金额"}},
+  "invalidatingTools": ["create-order"]
+}

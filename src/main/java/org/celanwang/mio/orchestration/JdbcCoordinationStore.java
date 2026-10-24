@@ -92,18 +92,29 @@ public final class JdbcCoordinationStore implements CoordinationStore {
         });
     }
     @Override public void startOperation(TaskRecord expected, OperationRecord operation, long now) {
+        startOperation(expected,operation,now,()->{});
+    }
+    @Override public void startOperation(TaskRecord expected,OperationRecord operation,long now,Runnable beforeCommit){
         transaction.executeWithoutResult(tx->{
             lockScope(operation.scopeKey());
             if(!operation.scopeKey().isEmpty()&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM operation_claims WHERE scope_key=?)",Boolean.class,operation.scopeKey())))throw new IllegalStateException("该账号范围存在未核实操作，禁止跨会话重复提交");
             Long version=jdbc.queryForObject("SELECT revision FROM goals WHERE session_id = ? FOR UPDATE",Long.class,expected.sessionId());
             if(version==null||version!=expected.goalRevision())throw new IllegalStateException("目标已改变，禁止提交旧操作");
             goal(expected.sessionId()).orElseThrow().requireActive();
+            if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass('goal_selections') IS NOT NULL",Boolean.class))){
+                var selected=jdbc.queryForList("SELECT s.*,p.revision AS current_program_revision,t.revision AS current_source_revision FROM goal_selections s LEFT JOIN goal_programs p ON p.goal_id=s.goal_id LEFT JOIN tasks t ON t.id=s.source_task WHERE s.goal_id=? AND s.state='EXECUTION_REQUESTED' AND (s.execution_key=? OR s.execution_goal_revision=?)",expected.goalId(),expected.spec().key(),expected.goalRevision());
+                if(!selected.isEmpty()){
+                    var row=selected.stream().filter(r->expected.spec().key().equals(r.get("execution_key"))).findFirst().orElseThrow(()->new IllegalStateException("当前版本只能提交所选执行任务"));
+                    if(!java.util.Objects.equals(row.get("execution_goal_revision"),expected.goalRevision())||!java.util.Objects.equals(row.get("program_revision"),row.get("current_program_revision"))||!java.util.Objects.equals(row.get("source_revision"),row.get("current_source_revision")))throw new IllegalStateException("所选计划或来源已改变，禁止提交旧操作");
+                }
+            }
             TaskDependencies.requireReady(this,expected,now);
             for(String source:TaskDependencies.ancestors(this,expected))
                 jdbc.queryForObject("SELECT id FROM tasks WHERE id = ? FOR UPDATE",String.class,source);
             // Row-lock waits must not freeze the fact's validity at request arrival time.
             long checkedAt=Math.max(now,clock.millis());
             TaskFacts.bind(this,expected,checkedAt);
+            beforeCommit.run();
             if(tasks(expected.sessionId()).stream().anyMatch(t->t.spec().capabilityId().equals(expected.spec().capabilityId())&&t.unresolvedEffects()))
                 throw new IllegalStateException("同领域已有未核查提交，禁止重复操作");
             saveTask(expected,expected.withOperation(operation,checkedAt),"operation_started");

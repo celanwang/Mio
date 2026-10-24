@@ -14,14 +14,19 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
     private final TaskExecution execution;
     private final PolicyEngine policy;
     private final java.util.function.Supplier<CapabilityAvailability> availability;
+    private final boolean declaredWrite;
     GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy){
         this(delegate,execution,policy,()->CapabilityAvailability.of(CapabilityAvailability.State.UNKNOWN,"NOT_CHECKED","未检查"));
     }
     GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy,java.util.function.Supplier<CapabilityAvailability> availability){
+        this(delegate,execution,policy,availability,false);
+    }
+    GuardedDomainTool(ToolBase delegate,TaskExecution execution,PolicyEngine policy,java.util.function.Supplier<CapabilityAvailability> availability,boolean declaredWrite){
         super(ToolBase.builder().name(delegate.getName()).description(delegate.getDescription())
                 .inputSchema(delegate.getParameters()).readOnly(false).concurrencySafe(false));
         this.delegate=delegate;this.execution=execution;this.policy=policy;
         this.availability=availability;
+        this.declaredWrite=declaredWrite;
     }
     @Override public AgentTool contractSource(){return delegate;}
     static boolean readOnly(ToolBase tool,Map<String,Object> input){
@@ -32,7 +37,7 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
         return ToolPolicies.READ_ONLY.contains(tool.getName()) || tool.isReadOnly();
     }
     @Override public Mono<PermissionDecision> checkPermissions(Map<String,Object> input,PermissionContextState context){
-        var task=execution.businessActive();boolean read=readOnly(delegate,input);
+        var task=execution.businessActive();boolean read=!declaredWrite&&readOnly(delegate,input);
         availability.get().requireTool(getName());
         if(!read&&task.spec().scope()==TaskScope.PREPARE)return Mono.just(PermissionDecision.deny("当前任务只允许查询与准备"));
         if(!read&&(policy.isCircuitOpen()||!ToolPolicies.isJevReviewable(getName(),input)))return Mono.just(PermissionDecision.ask("本次操作必须人工确认"));
@@ -45,12 +50,14 @@ final class GuardedDomainTool extends ToolBase implements ToolContract.SourceBou
             availability.get().requireTool(getName());
             execution.budget().tool();
             execution.validateApproval(call.getToolUseBlock(),ToolContract.hash(this));
-            boolean read=readOnly(delegate,call.getInput());
+            boolean read=!declaredWrite&&readOnly(delegate,call.getInput());
+            if(!read)execution.verifyEffectConditions(call.getToolUseBlock());
             var observation=execution.observationStarting(call.getToolUseBlock());
             String operation=read?null:execution.beforeEffect(call.getToolUseBlock(),ToolContract.hash(this),delegate instanceof OperationBoundTool bound?bound.operationScope():"");
             // Persisting the operation can wait on database locks; recheck the lease and grant afterward.
             execution.businessActive();
             execution.validateApproval(call.getToolUseBlock(),ToolContract.hash(this));
+            if(!read)execution.recheckEffectDeadline(call.getToolUseBlock());
             Mono<ToolResultBlock> invocation;
             if(operation!=null&&delegate instanceof OperationBoundTool bound){var op=execution.operation(operation);invocation=bound.callWithOperation(call,op.logicalId(),op.scopeKey());}
             else invocation=delegate.callAsync(call);

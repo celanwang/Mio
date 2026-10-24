@@ -19,6 +19,14 @@ public final class TaskExecution {
     private final List<FactExtractor> factExtractors;
     private final AgentCapability capability;
     private volatile String question, finalAnswer;
+    private record EffectProof(long expiresAt,long taskRevision){}
+    private final Map<String,EffectProof> effectDeadlines=new HashMap<>();
+    public synchronized void verifyEffectConditions(ToolUseBlock call){var task=businessActive();effectDeadlines.put(call.getId(),new EffectProof(budget.effectConditions(task),task.revision()));}
+    private void verifyEffectProof(ToolUseBlock call,boolean revision){
+        var task=businessActive();var proof=effectDeadlines.get(call.getId());
+        if(budget.hasEffectGuard()&&(proof==null||clock.millis()>=proof.expiresAt()||revision&&task.revision()!=proof.taskRevision()))throw new IllegalStateException("所选方案条件尚未重新核实或证据已改变、过期");
+    }
+    public synchronized void recheckEffectDeadline(ToolUseBlock call){verifyEffectProof(call,false);}
     public TaskExecution(CoordinationStore store,TaskRecord task,GoalRecord goal,RunBudget budget,PolicyEngine policy,
                          Clock clock,Map<String,ApprovalGrant> approved){
         this(store,task,goal,budget,policy,clock,approved,List.of());
@@ -74,6 +82,7 @@ public final class TaskExecution {
     }
     public synchronized String beforeEffect(ToolUseBlock call,String contractHash,String scopeKey){
         var task=businessActive();
+        verifyEffectProof(call,true);
         if(task.spec().scope()!=TaskScope.REQUEST_APPROVAL)throw new IllegalStateException("当前任务仅允许查询与准备");
         if(task.effectStarted())throw new IllegalStateException("已有提交记录，需核查结果，禁止重复提交");
         if(policy.isCircuitOpen()&&!humanApproved(call,contractHash))throw new IllegalStateException("急停开启，操作需要本次人工确认");
@@ -82,7 +91,7 @@ public final class TaskExecution {
             throw new IllegalStateException("当前写操作缺少本次人工批准");
         String id=task.id()+":"+call.getId();
         var operation=new OperationRecord(id,call.getId(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"SUBMITTING","",OperationOutcome.UNKNOWN,"",List.of(),UUID.randomUUID().toString(),scopeKey);
-        budget.fenced(()->{store.startOperation(task,operation,clock.millis());return null;});return id;
+        budget.fenced(()->{store.startOperation(task,operation,clock.millis(),()->verifyEffectProof(call,true));return null;});return id;
     }
     public record ObservationCall(FactObservation observation,FactExtractor extractor) {}
     public synchronized Optional<ObservationCall> observationStarting(ToolUseBlock call){
@@ -94,6 +103,7 @@ public final class TaskExecution {
         var observation=new FactObservation(UUID.randomUUID().toString(),extractor.invalidatedKey(call.getName(),call.getInput()).orElseThrow(),
                 extractor.source(),call.getName(),JsonFingerprint.hash(call.getInput()),clock.millis(),"","",null);
         budget.fenced(()->{store.recordObservation(taskId,observation,true,clock.millis());return null;});
+        var proof=effectDeadlines.get(call.getId());if(proof!=null)effectDeadlines.put(call.getId(),new EffectProof(proof.expiresAt(),proof.taskRevision()+1));
         return Optional.of(new ObservationCall(observation,extractor));
     }
     public synchronized void observationReturned(ObservationCall call,ToolUseBlock tool,String raw,String frameworkState){

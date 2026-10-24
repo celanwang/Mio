@@ -4,6 +4,11 @@ import java.util.*;
 
 /** Explain deterministic progress without equating finished reports with business fulfillment. */
 public record GoalOutcome(String conclusion,List<String> gaps,List<String> nextSteps) {
+    public static GoalOutcome execution(org.celanwang.mio.orchestration.TaskSummary task){
+        String state=task==null?"EXECUTION_REQUESTED":task.status().name();var gaps=new ArrayList<String>();var next=new ArrayList<String>();
+        switch(state){case "AWAITING_APPROVAL" -> {gaps.add("具体业务调用尚待用户批准");next.add("在方案选择与业务执行区域核对参数，逐次批准或拒绝");}case "NEEDS_INPUT","INPUT_READY" -> {gaps.add("执行任务需要补充或继续处理信息");next.add("回答或继续对应执行任务");}case "UNKNOWN" -> {gaps.add("业务结果仍需核查，禁止重复提交");next.add("核查原操作及其关联回执");}case "COMPLETED" -> {gaps.add("任务完成不等于供应商已履约，按资源状态与证据范围判断");next.add("核对回执、跟踪关联资源并记录用户反馈");}case "FAILED","STALE","CANCELLED" -> {gaps.add("执行未形成可直接继续的成功结果");next.add("先核查已有操作，再重新准备新的方案");}default -> next.add("等待执行任务返回；请求已登记时不要重复提交");}
+        return new GoalOutcome("已进入独立执行阶段："+state+"。原准备成果保留为来源，新的业务结果以操作回执为准。",gaps,next);
+    }
     public static GoalOutcome of(String state,List<Map<String,Object>> steps,List<Map<String,Object>> actions) {
         var gaps=new ArrayList<String>();var next=new LinkedHashSet<String>();
         for(var step:steps) {

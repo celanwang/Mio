@@ -33,6 +33,9 @@ public class AutomationController {
         this.traceStore = traceStore;
     }
 
+    @org.springframework.web.bind.annotation.ExceptionHandler(org.springframework.dao.DataAccessException.class)
+    public org.springframework.http.ResponseEntity<java.util.Map<String,String>> unavailable(){return org.springframework.http.ResponseEntity.status(503).body(java.util.Map.of("message","自动化状态或审计暂不可用，未完成变更"));}
+
     @GetMapping
     public List<AutomationRule> rules() {
         return automationStore.rules();
@@ -42,10 +45,8 @@ public class AutomationController {
     public List<AutomationRule> approve(@PathVariable String id) {
         AutomationRule rule = automationStore.approve(id);
         if (rule == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "规则不存在。");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "规则不存在或状态已改变，请刷新。");
         }
-        traceStore.append(AUDIT_SESSION, "human", "confirm", "批准自动化规则",
-                rule.title() + "（" + rule.toolName() + "）");
         return automationStore.rules();
     }
 
@@ -53,10 +54,8 @@ public class AutomationController {
     public List<AutomationRule> reject(@PathVariable String id) {
         AutomationRule rule = automationStore.reject(id);
         if (rule == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "规则不存在。");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "规则不存在或状态已改变，请刷新。");
         }
-        traceStore.append(AUDIT_SESSION, "human", "confirm", "拒绝自动化规则",
-                rule.title() + "（" + rule.toolName() + "）");
         return automationStore.rules();
     }
 
@@ -67,8 +66,6 @@ public class AutomationController {
         if (rule == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "规则不存在或未处于已批准状态。");
         }
-        traceStore.append(AUDIT_SESSION, "human", "confirm", "吊销自动化规则",
-                rule.title() + "（" + rule.toolName() + "）");
         return automationStore.rules();
     }
 }

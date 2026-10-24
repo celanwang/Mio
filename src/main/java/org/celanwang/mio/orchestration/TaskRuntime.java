@@ -21,6 +21,8 @@ public final class TaskRuntime {
     private final List<FactExtractor> factExtractors;
     private final ExecutionLeaseStore leases;
     private final TaskQueue queue;
+    private java.util.function.ToLongFunction<TaskRecord> effectGuard;
+    public TaskRuntime withEffectGuard(java.util.function.ToLongFunction<TaskRecord> guard){this.effectGuard=guard;return this;}
     private final Map<String,Object> owners=new ConcurrentHashMap<>();
     public TaskRuntime(CoordinationStore store,AgentRegistry registry,TaskWorker worker,PolicyEngine policy,Clock clock,int maxTasks){
         this(store,registry,worker,policy,clock,maxTasks,List.of());
@@ -214,6 +216,7 @@ public final class TaskRuntime {
                 if(!reserved)budget.task();
                 var running=current.start(budget.lease(),clock.millis());
                 budget.fenced(()->{if(claim==null)store.saveTask(current,running,"task_running");else queue.start(claim,current,running);return null;});
+                if(effectGuard!=null)budget.bindDefaultEffectGuard(effectGuard);
                 var execution=new TaskExecution(store,running,goal,budget,policy,clock,approved,verifiers,factExtractors,registry.require(task.spec().capabilityId()));
                 return Mono.defer(()->{
                     var bound=new TaskWorker.Input(input.first(),input.userText(),input.decisions(),TaskFacts.bind(store,running,clock.millis()));

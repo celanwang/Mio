@@ -103,7 +103,7 @@ public class ProfileDistiller {
             String id=ProfileStore.sanitize(op.slug()==null||op.slug().isBlank()?op.title().trim():op.slug().trim());
             String scope=op.scope()==null||op.scope().isBlank()?ProfileStore.SCOPE_GLOBAL:op.scope().trim();
             if(!profileStore.saveInferred(new ProfilePage(id,op.title().trim(),scope,ProfileStore.SOURCE_INFERRED,
-                    op.confidence()==null?.8:Math.max(0,Math.min(1,op.confidence())),now,op.content().trim()),plan.revisions().get(id),plan.sourcePosition()))preserved++;
+                    op.confidence()==null?.8:Math.max(0,Math.min(1,op.confidence())),now,op.content().trim()),plan.revisions().get(id),plan.sourcePosition(),plan.messageId()))preserved++;
         }
         var triples=plan.result().triples().stream().filter(t->t.subject()!=null&&!t.subject().isBlank()&&t.predicate()!=null&&!t.predicate().isBlank()&&t.object()!=null&&!t.object().isBlank())
                 .map(t->new EntityStore.Triple(t.subject().trim(),t.predicate().trim(),t.object().trim(),plan.sourceTimestamp(),null,plan.sourceTimestamp())).toList();

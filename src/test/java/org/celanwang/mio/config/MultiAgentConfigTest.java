@@ -69,5 +69,6 @@ class MultiAgentConfigTest {
         @Bean EmbeddingClient embedding(){return mock(EmbeddingClient.class);}
         @Bean org.celanwang.mio.memory.jobs.JdbcMemoryUsage usage(){return mock(org.celanwang.mio.memory.jobs.JdbcMemoryUsage.class);}
         @Bean ProfileStore profiles(){return mock(ProfileStore.class);}
+        @Bean PersonalContext personal(){return mock(PersonalContext.class);}
     }
 }

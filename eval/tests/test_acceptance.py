@@ -49,9 +49,16 @@ class AcceptanceTest(unittest.TestCase):
         self.assertIn('fixture_not_qualified', assess(self.root, self.directory)['failed_checks'])
 
     def test_capability_package_changes_are_part_of_the_source_fingerprint(self):
-        (self.root / 'agent-packages').mkdir()
-        (self.root / 'agent-packages/research.json').write_text('{"enabled": true}')
-        self.assertIn('source_unchanged', assess(self.root, self.directory)['failed_checks'])
+        for folder in ('agent-packages', 'evidence-adapters'):
+            before = fingerprint(self.root)
+            directory = self.root / folder
+            directory.mkdir(exist_ok=True)
+            (directory / 'contract.json').write_text('{"version":1}')
+            self.assertNotEqual(before, fingerprint(self.root))
+            self.assertIn('source_unchanged', assess(self.root, self.directory)['failed_checks'])
+            first = fingerprint(self.root)
+            (directory / 'contract.json').write_text('{"version":2}')
+            self.assertNotEqual(first, fingerprint(self.root))
 
     def test_begin_invalidates_the_previous_success_artifact(self):
         write(self.directory / 'acceptance.json', {'status': 'OFFLINE_COMPLETE'})

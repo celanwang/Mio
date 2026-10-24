@@ -23,12 +23,12 @@ class ProfileConsistencyTest {
     @Test void manualMutationAndReadFailuresReturn503WithoutLeakingDatabaseDetails() throws Exception {
         var store = mock(ProfileStore.class);
         var failure = new DataAccessResourceFailureException("secret database details");
-        doThrow(failure).when(store).savePage(any());doThrow(failure).when(store).deletePage(anyString());
+        doThrow(failure).when(store).saveExplicit(any(),anyLong(),any(),anyString());doThrow(failure).when(store).deleteExplicit(anyString(),anyLong(),anyString());
         when(store.pagesStrict()).thenThrow(failure);
         var mvc = MockMvcBuilders.standaloneSetup(new ProfileController(store, mock(EntityStore.class), mock(TrustStore.class))).build();
         mvc.perform(put("/api/profile").contentType("application/json").content("{\"title\":\"地址\",\"content\":\"上海\"}"))
                 .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.message").value("画像存储暂不可用，请刷新核对后重试。"));
-        mvc.perform(delete("/api/profile").param("id", "地址")).andExpect(status().isServiceUnavailable());
+        mvc.perform(delete("/api/profile").param("id", "地址").param("expectedRevision","1")).andExpect(status().isServiceUnavailable());
         var response = mvc.perform(get("/api/profile")).andExpect(status().isServiceUnavailable()).andReturn().getResponse();
         assertThat(response.getContentAsString()).doesNotContain("secret database details");
     }
