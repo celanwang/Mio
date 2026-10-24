@@ -10,7 +10,7 @@ class Element {
   blur(){}
 }
 const all=node=>[node,...node.children.flatMap(all)];
-function setup(file,handler){const root=new Element('root'),calls=[];let id=0;const context=vm.createContext({el:(tag,text)=>new Element(tag,text),input:(value,placeholder)=>Object.assign(new Element('input'),{value,placeholder}),session:()=> 'session',base:()=>'/api/goals/session',workspaceBase:()=>'/api/workspace/goals/session',api:async(path,method='GET',body)=>{calls.push({path,method,body});return handler(path,method,body);},notice:()=>{},load:async()=>{},workbench:async()=>{},crypto:{randomUUID:()=> 'request'+(++id)},document:{body:{insertBefore:node=>root.append(node)},querySelector:()=>null}});vm.runInContext(fs.readFileSync(new URL('../src/main/resources/static/'+file,import.meta.url),'utf8'),context);return {context,root,calls,run:code=>vm.runInContext(code,context)};}
+function setup(file,handler){const root=new Element('root'),calls=[];let id=0,current='session';const context=vm.createContext({el:(tag,text)=>new Element(tag,text),input:(value,placeholder)=>Object.assign(new Element('input'),{value,placeholder}),session:()=>current,base:()=>'/api/goals/'+current,workspaceBase:()=>'/api/workspace/goals/'+current,api:async(path,method='GET',body)=>{calls.push({path,method,body});return handler(path,method,body);},notice:()=>{},load:async()=>{},workbench:async()=>{},crypto:{randomUUID:()=> 'request'+(++id)},document:{body:{insertBefore:node=>root.append(node)},querySelector:()=>null}});vm.runInContext(fs.readFileSync(new URL('../src/main/resources/static/'+file,import.meta.url),'utf8'),context);return {context,root,calls,setSession:value=>{current=value;},run:code=>vm.runInContext(code,context)};}
 test('selecting a preparation never approves or executes before separate user actions',async()=>{
   let chosen=false,requested=false,approved=false;const f=setup('outcomes.js',(path,method)=>{
     if(path.endsWith('/program'))return {goal:{sessionId:'session',revision:2},program:{revision:3,steps:[{id:'candidate',objective:'prepared option'}],policy:{until:Date.now()+60000}},evidenceHash:'a'.repeat(64)};
@@ -36,4 +36,15 @@ test('resource notifications confirm bounded scope without requesting a business
   const f=setup('outcomes.js',path=>path.endsWith('/program')?{goal:{revision:2},program:{revision:3,policy:{until:Date.now()+60000}}}:[]);
   f.run("triggerKind.value='RESOURCE_CHANGED';triggerAction.value='NOTIFY'");await f.run('triggerCreate.onclick()');const post=f.calls.find(c=>c.method==='POST');
   assert.equal(post.path,'/api/workspace/goals/session/triggers');assert.equal(post.body.expectedRevision,3);assert.equal(post.body.action,'NOTIFY');assert.equal(post.body.cooldownSeconds,300);assert.equal(post.body.maxActivations,5);assert.equal(f.calls.some(c=>c.path.includes('/execute')),false);
+});
+
+test('switching goals while a plan is loading cannot install a trigger on another goal',async()=>{
+  let resolve;const f=setup('outcomes.js',path=>path.endsWith('/program')?new Promise(done=>{resolve=done;}):[]);
+  const pending=f.run('triggerCreate.onclick()');await Promise.resolve();f.setSession('new-session');resolve({goal:{revision:2},program:{revision:3,policy:{until:Date.now()+60000}}});await pending;
+  assert.equal(f.calls.some(c=>c.method==='POST'),false);
+});
+test('an old preference exception button cannot mutate the newly opened goal',async()=>{
+  const f=setup('personal.js',path=>path.endsWith('/details')?[{id:'quiet',title:'环境',scope:'global',content:'安静',source:'inferred',revision:7}]:{excludedProfileIds:[]});
+  await f.run('personalRead.onclick()');const button=all(f.root).find(n=>n.textContent==='本目标暂不使用');f.run("personalReason.value='本次例外'");f.setSession('new-session');await button.onclick();
+  assert.equal(f.calls.some(c=>c.method==='POST'),false);
 });
